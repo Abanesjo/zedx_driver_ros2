@@ -1,0 +1,20 @@
+<CycloneDDS>
+    <Domain>
+        <General>
+            <Interfaces>
+                <NetworkInterface name="enP8p1s0" priority="default" multicast="false" />
+            </Interfaces>
+            <MaxMessageSize>65500B</MaxMessageSize>
+        </General>
+        <Internal>
+            <SocketReceiveBufferSize min="10MB"/>
+            <Watermarks>
+                <WhcHigh>500kB</WhcHigh>
+            </Watermarks>
+        </Internal>
+        <Discovery>
+            <ParticipantIndex>auto</ParticipantIndex>
+            <MaxAutoParticipantIndex>120</MaxAutoParticipantIndex>
+        </Discovery>
+    </Domain>
+</CycloneDDS>
