@@ -36,14 +36,19 @@ RUN apt-get install -y --no-install-recommends \
     libspdlog-dev \
     libfmt-dev \
     sudo \
-    tmux \
-    && rm -rf /var/lib/apt/lists/*
+    tmux
 
-RUN rosdep init
+COPY dependencies/ /workspace/ros2_ws/src/dependencies
 
 WORKDIR /workspace/ros2_ws
 
 SHELL ["/bin/bash", "-c"]
+
+RUN rosdep init
+RUN rosdep update
+RUN rosdep install --from-paths src --ignore-src -r -y
+
+RUN source /opt/ros/humble/setup.bash && colcon build --symlink-install --parallel-workers $(( $(nproc) / 2 ))
 
 COPY docker/entrypoint.sh /entrypoint.sh
 

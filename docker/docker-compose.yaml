@@ -14,6 +14,6 @@ services:
       NVIDIA_DRIVER_CAPABILITIES: all
     volumes: 
     - /tmp/.X11-unix:/tmp/.X11-unix
-    - ../src:/workspace/ros2_ws/src
+    - ../src:/workspace/ros2_ws/src/zedx_driver
     stdin_open: true
     tty: true
