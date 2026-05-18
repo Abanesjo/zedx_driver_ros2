@@ -1,15 +1,35 @@
 <launch>
   <arg name="camera_model" default="$(env CAM_MODEL zedx)" />
-  <arg name="camera_name" default="zedbox" />
-  <arg name="stream_port" default="30000" />
+  <arg name="left_camera_name" default="zed_left" />
+  <arg name="right_camera_name" default="zed_right" />
+  <arg name="left_camera_id" default="0" />
+  <arg name="right_camera_id" default="1" />
+  <arg name="left_stream_port" default="30000" />
+  <arg name="right_stream_port" default="30002" />
 
   <include file="$(find-pkg-share zed_wrapper)/launch/zed_camera.launch.py">
     <arg name="camera_model" value="$(var camera_model)" />
-    <arg name="camera_name" value="$(var camera_name)" />
+    <arg name="camera_name" value="$(var left_camera_name)" />
+    <arg name="camera_id" value="$(var left_camera_id)" />
+    <arg name="publish_tf" value="false" />
+    <arg name="publish_map_tf" value="false" />
 
     <arg
       name="param_overrides"
-      value="stream_server.stream_enabled:=true;stream_server.codec:=H265;stream_server.port:=$(var stream_port);stream_server.bitrate:=12500;stream_server.target_framerate:=30;depth.depth_mode:=NONE;depth.publish_depth_map:=false;depth.publish_point_cloud:=false;pos_tracking.pos_tracking_enabled:=false;object_detection.od_enabled:=false;body_tracking.bt_enabled:=false"
+      value="stream_server.stream_enabled:=true;stream_server.codec:=H265;stream_server.port:=$(var left_stream_port);stream_server.bitrate:=12500;stream_server.target_framerate:=30;depth.depth_mode:=NONE;depth.publish_depth_map:=false;depth.publish_point_cloud:=false;pos_tracking.pos_tracking_enabled:=false;object_detection.od_enabled:=false;body_tracking.bt_enabled:=false"
+    />
+  </include>
+
+  <include file="$(find-pkg-share zed_wrapper)/launch/zed_camera.launch.py">
+    <arg name="camera_model" value="$(var camera_model)" />
+    <arg name="camera_name" value="$(var right_camera_name)" />
+    <arg name="camera_id" value="$(var right_camera_id)" />
+    <arg name="publish_tf" value="false" />
+    <arg name="publish_map_tf" value="false" />
+
+    <arg
+      name="param_overrides"
+      value="stream_server.stream_enabled:=true;stream_server.codec:=H265;stream_server.port:=$(var right_stream_port);stream_server.bitrate:=12500;stream_server.target_framerate:=30;depth.depth_mode:=NONE;depth.publish_depth_map:=false;depth.publish_point_cloud:=false;pos_tracking.pos_tracking_enabled:=false;object_detection.od_enabled:=false;body_tracking.bt_enabled:=false"
     />
   </include>
 </launch>
