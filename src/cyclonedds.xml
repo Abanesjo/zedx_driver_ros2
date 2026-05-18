@@ -3,6 +3,7 @@
         <General>
             <Interfaces>
                 <NetworkInterface name="enP8p1s0" priority="default" multicast="true" />
+                <!-- <NetworkInterface name="enp130s0" priority="default" multicast="true" /> -->
             </Interfaces>
             <MaxMessageSize>65500B</MaxMessageSize>
         </General>

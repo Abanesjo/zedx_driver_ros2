@@ -1,4 +1,6 @@
 FROM stereolabs/zed:5.3.0-py-devel-l4t-r36.4
+# FROM stereolabs/zed:5.3-gl-devel-cuda12.8-ubuntu22.04
+
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PIP_BREAK_SYSTEM_PACKAGES=1
