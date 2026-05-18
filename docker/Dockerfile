@@ -39,6 +39,8 @@ RUN apt-get install -y --no-install-recommends \
     tmux \
     && rm -rf /var/lib/apt/lists/*
 
+RUN rosdep init
+
 WORKDIR /workspace/ros2_ws
 
 SHELL ["/bin/bash", "-c"]
