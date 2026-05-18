@@ -12,7 +12,8 @@ services:
     runtime: nvidia
     gpus: all
     environment:
-      DISPLAY: ${DISPLAY:-:0}
+      DISPLAY: ${DISPLAY}
+      XAUTHORITY: ${XAUTHORITY}
       NVIDIA_DRIVER_CAPABILITIES: all
       NVIDIA_VISIBLE_DEVICES: all
     volumes: 
