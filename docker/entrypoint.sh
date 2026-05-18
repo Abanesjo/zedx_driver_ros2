@@ -19,6 +19,7 @@ export RMW_IMPLEMENTATION="rmw_cyclonedds_cpp"
 export CYCLONEDDS_URI=file:///workspace/dependencies/cyclonedds.xml
 alias mujoco='export LD_LIBRARY_PATH=/usr/local/lib:/usr/lib/x86_64-linux-gnu'
 export XLA_PYTHON_CLIENT_MEM_FRACTION=".50"
+export CAM_MODEL="zedx"
 EOF
 fi
 

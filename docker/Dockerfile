@@ -3,26 +3,41 @@ FROM stereolabs/zed:5.3.0-py-devel-l4t-r36.4
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PIP_BREAK_SYSTEM_PACKAGES=1
 ENV PIP_ROOT_USER_ACTION=ignore
+ENV ROS_DISTRO=humble
 
 RUN apt update && apt upgrade -y
 
-RUN apt install ros-humble-desktop -y
+# Basic tools + ROS 2 apt repository
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    gnupg2 \
+    lsb-release \
+    ca-certificates \
+    software-properties-common \
+    && add-apt-repository universe \
+    && curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key \
+        -o /usr/share/keyrings/ros-archive-keyring.gpg \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] http://packages.ros.org/ros2/ubuntu $(. /etc/os-release && echo ${UBUNTU_CODENAME}) main" \
+        > /etc/apt/sources.list.d/ros2.list \
+    && apt-get update
 
-RUN apt install -y \
+# ROS 2 + dependencies
+RUN apt-get install -y --no-install-recommends \
+    ros-humble-desktop \
     ros-humble-rmw-cyclonedds-cpp \
     ros-humble-rosidl-generator-dds-idl \
-    ros-humble-rosbag2-cpp \
-    ros-humble-joint-state-publisher \
-    ros-humble-joint-state-publisher-gui \
-    ros-humble-pinocchio \
+    python3-colcon-common-extensions \
+    python3-rosdep \
+    python3-vcstool \
+    python3-pip \
     libyaml-cpp-dev \
     libeigen3-dev \
-    python3-pip \
     libboost-all-dev \
     libspdlog-dev \
     libfmt-dev \
     sudo \
-    tmux
+    tmux \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /workspace/ros2_ws
 
