@@ -48,11 +48,16 @@ RUN rosdep init
 RUN rosdep update
 RUN rosdep install --from-paths src --ignore-src -r -y
 
-RUN source /opt/ros/humble/setup.bash && colcon build --symlink-install --parallel-workers $(( $(nproc) / 2 ))
+RUN source /opt/ros/humble/setup.bash && \
+    colcon build --symlink-install --parallel-workers $(( $(nproc) / 2 )) \
+    --cmake-args \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_LIBRARY_PATH=/usr/local/cuda/lib64/stubs \
+    -DCMAKE_CXX_FLAGS="-Wl,--allow-shlib-undefined" \
+    --no-warn-unused-cli
 
 COPY docker/entrypoint.sh /entrypoint.sh
 
 RUN chmod +x /entrypoint.sh
 
 CMD ["/entrypoint.sh"]
-
