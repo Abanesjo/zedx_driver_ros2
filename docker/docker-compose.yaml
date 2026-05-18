@@ -1,0 +1,19 @@
+services:
+  zedx_driver_ros2:
+    image: zedx_driver_ros2:latest
+    build: 
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: zedx_driver_ros2
+    network_mode: host
+    privileged: true
+    runtime: nvidia
+    gpus: all
+    environment:
+      DISPLAY: ${DISPLAY}
+      NVIDIA_DRIVER_CAPABILITIES: all
+    volumes: 
+    - /tmp/.X11-unix:/tmp/.X11-unix
+    - ../src:/workspace/ros2_ws/src
+    stdin_open: true
+    tty: true
