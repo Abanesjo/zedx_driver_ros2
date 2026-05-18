@@ -1,0 +1,31 @@
+<launch>
+  <!-- Camera model must match the camera connected to the ZED Box Mini -->
+  <arg name="camera_model" default="$(env CAM_MODEL zedx)" />
+
+  <!-- ROS name for the RTX-side wrapper node -->
+  <arg name="camera_name" default="zed_rtx" />
+
+  <!-- IP address of the ZED Box Mini streaming server -->
+  <arg name="stream_address" default="$(env ZED_BOX_IP)" />
+
+  <!-- Must match the Box-side stream_server.port -->
+  <arg name="stream_port" default="30000" />
+
+  <!-- Body tracking options -->
+  <arg name="body_model" default="HUMAN_BODY_ACCURATE" />
+  <arg name="body_format" default="BODY_38" />
+
+  <include file="$(find-pkg-share zed_wrapper)/launch/zed_camera.launch.py">
+    <arg name="camera_model" value="$(var camera_model)" />
+    <arg name="camera_name" value="$(var camera_name)" />
+
+    <!-- These make this wrapper instance a streaming client -->
+    <arg name="stream_address" value="$(var stream_address)" />
+    <arg name="stream_port" value="$(var stream_port)" />
+
+    <arg
+      name="param_overrides"
+      value="depth.depth_mode:=NEURAL;depth.publish_depth_map:=false;depth.publish_point_cloud:=false;body_tracking.bt_enabled:=true;body_tracking.model:=$(var body_model);body_tracking.body_format:=$(var body_format);body_tracking.enable_tracking:=true;object_detection.od_enabled:=false"
+    />
+  </include>
+</launch>
