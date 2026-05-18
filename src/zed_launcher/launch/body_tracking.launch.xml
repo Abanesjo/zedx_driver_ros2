@@ -6,7 +6,7 @@
   <arg name="camera_name" default="zed_rtx" />
 
   <!-- IP address of the ZED Box Mini streaming server -->
-  <arg name="stream_address" default="$(env ZED_BOX_IP)" />
+  <arg name="stream_address" default="$(env ZED_BOX_IP 192.168.123.200)" />
 
   <!-- Must match the Box-side stream_server.port -->
   <arg name="stream_port" default="30000" />
