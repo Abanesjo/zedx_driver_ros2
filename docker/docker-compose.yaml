@@ -6,14 +6,23 @@ services:
       dockerfile: docker/Dockerfile
     container_name: zedx_driver_ros2
     network_mode: host
+    ipc: host
+    pid: host
     privileged: true
     runtime: nvidia
     gpus: all
     environment:
-      DISPLAY: ${DISPLAY}
+      DISPLAY: ${DISPLAY:-:0}
       NVIDIA_DRIVER_CAPABILITIES: all
+      NVIDIA_VISIBLE_DEVICES: all
     volumes: 
-    - /tmp/.X11-unix:/tmp/.X11-unix
+    - /tmp:/tmp
+    - /dev:/dev
+    - /dev/shm:/dev/shm
+    - /var/nvidia/nvcam/settings/:/var/nvidia/nvcam/settings/
+    - /etc/systemd/system/zed_x_daemon.service:/etc/systemd/system/zed_x_daemon.service:ro
+    - /usr/local/zed/resources/:/usr/local/zed/resources/
+    - /usr/local/zed/settings/:/usr/local/zed/settings/
     - ../src:/workspace/ros2_ws/src/zedx_driver
     stdin_open: true
     tty: true
