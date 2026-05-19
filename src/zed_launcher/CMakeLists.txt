@@ -6,6 +6,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
+find_package(sensor_msgs REQUIRED)
 find_package(zed_msgs REQUIRED)
 
 if(CMAKE_VERSION VERSION_GREATER_EQUAL "3.27")
@@ -45,6 +46,7 @@ target_link_libraries(zed_body_fusion_node
 
 ament_target_dependencies(zed_body_fusion_node
   rclcpp
+  sensor_msgs
   zed_msgs
 )
 

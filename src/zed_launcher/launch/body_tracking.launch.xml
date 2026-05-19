@@ -4,6 +4,8 @@
   <arg name="stream_address" default="$(env ZED_BOX_IP 127.0.0.1)" />
   <arg name="left_stream_port" default="30000" />
   <arg name="right_stream_port" default="30002" />
+  <arg name="left_camera_name" default="zed_left" />
+  <arg name="right_camera_name" default="zed_right" />
   <arg name="left_serial" default="41235597" />
   <arg name="right_serial" default="49967328" />
   <arg
@@ -18,11 +20,12 @@
   <arg name="single_body_switch_frames" default="5" />
   <arg name="publish_frame_id" default="zed_fusion_map" />
   <arg name="output_topic" default="body_trk/skeletons" />
-  <arg name="camera_resolution" default="HD720" />
-  <arg name="camera_fps" default="30" />
+  <arg name="camera_resolution" default="SVGA" />
+  <arg name="camera_fps" default="60" />
+  <arg name="publish_images" default="true" />
   <arg name="depth_mode" default="NEURAL_LIGHT" />
   <arg name="fusion_reference_frame" default="BASELINK" />
-  <arg name="fusion_publish_rate_hz" default="30.0" />
+  <arg name="fusion_publish_rate_hz" default="60.0" />
   <arg name="fusion_skeleton_smoothing" default="0.0" />
   <arg name="fusion_minimum_allowed_cameras" default="-1" />
   <arg name="fusion_minimum_allowed_keypoints" default="-1" />
@@ -51,6 +54,8 @@
     <param name="stream_address" value="$(var stream_address)" />
     <param name="left_stream_port" value="$(var left_stream_port)" />
     <param name="right_stream_port" value="$(var right_stream_port)" />
+    <param name="left_camera_name" value="$(var left_camera_name)" />
+    <param name="right_camera_name" value="$(var right_camera_name)" />
     <param name="left_serial" value="$(var left_serial)" />
     <param name="right_serial" value="$(var right_serial)" />
     <param name="fusion_config_path" value="$(var fusion_config_path)" />
@@ -64,6 +69,7 @@
     <param name="output_topic" value="$(var output_topic)" />
     <param name="camera_resolution" value="$(var camera_resolution)" />
     <param name="camera_fps" value="$(var camera_fps)" />
+    <param name="publish_images" value="$(var publish_images)" />
     <param name="depth_mode" value="$(var depth_mode)" />
     <param name="fusion_reference_frame" value="$(var fusion_reference_frame)" />
     <param name="fusion_publish_rate_hz" value="$(var fusion_publish_rate_hz)" />

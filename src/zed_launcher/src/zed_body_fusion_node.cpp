@@ -5,14 +5,22 @@
 #include <atomic>
 #include <chrono>
 #include <cctype>
+#include <cstdint>
+#include <cstring>
 #include <iterator>
+#include <limits>
 #include <memory>
 #include <sstream>
 #include <string>
 #include <thread>
 #include <vector>
 
+#include <builtin_interfaces/msg/time.hpp>
 #include <rclcpp/rclcpp.hpp>
+#include <sensor_msgs/distortion_models.hpp>
+#include <sensor_msgs/image_encodings.hpp>
+#include <sensor_msgs/msg/camera_info.hpp>
+#include <sensor_msgs/msg/image.hpp>
 #include <zed_msgs/msg/objects_stamped.hpp>
 
 namespace
@@ -255,8 +263,14 @@ private:
   {
     sl::FusionConfiguration config;
     sl::Camera camera;
+    sl::Mat image;
+    sensor_msgs::msg::CameraInfo camera_info;
+    rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr image_pub;
+    rclcpp::Publisher<sensor_msgs::msg::CameraInfo>::SharedPtr camera_info_pub;
     std::thread thread;
     std::atomic_bool running{false};
+    std::string camera_name;
+    std::string image_frame_id;
     unsigned int serial_number = 0;
   };
 
@@ -268,6 +282,8 @@ private:
     output_topic_ = declare_parameter<std::string>("output_topic", "body_trk/skeletons");
     publish_frame_id_ = declare_parameter<std::string>("publish_frame_id", "zed_fusion_map");
     stream_address_ = declare_parameter<std::string>("stream_address", "");
+    left_camera_name_ = declare_parameter<std::string>("left_camera_name", "zed_left");
+    right_camera_name_ = declare_parameter<std::string>("right_camera_name", "zed_right");
 
     body_model_ = parseBodyModel(declare_parameter<std::string>("body_model", "HUMAN_BODY_FAST"));
     body_format_ = parseBodyFormat(declare_parameter<std::string>("body_format", "BODY_38"));
@@ -295,6 +311,7 @@ private:
       declare_parameter<int>("single_body_switch_frames", 5);
 
     single_body_enabled_ = declare_parameter<bool>("single_body_enabled", true);
+    publish_images_ = declare_parameter<bool>("publish_images", true);
     sender_tracking_enabled_ = declare_parameter<bool>("sender_tracking_enabled", false);
     fusion_tracking_enabled_ = declare_parameter<bool>("fusion_tracking_enabled", true);
     body_fitting_enabled_ = declare_parameter<bool>("body_fitting_enabled", false);
@@ -311,6 +328,10 @@ private:
     }
     if (camera_fps_ <= 0) {
       throw std::runtime_error("camera_fps must be positive");
+    }
+    if (publish_images_ && (left_camera_name_.empty() || right_camera_name_.empty())) {
+      throw std::runtime_error(
+        "left_camera_name and right_camera_name must be non-empty when publish_images is true");
     }
     if (single_body_switch_margin_ < 0.0) {
       throw std::runtime_error("single_body_switch_margin must be non-negative");
@@ -380,6 +401,184 @@ private:
       "No stream port configured for camera serial " + std::to_string(serial));
   }
 
+  std::string cameraNameForConfig(const sl::FusionConfiguration & config, size_t index) const
+  {
+    const auto serial = static_cast<int>(config.serial_number);
+    if (left_serial_ > 0 && serial == left_serial_) {
+      return left_camera_name_;
+    }
+    if (right_serial_ > 0 && serial == right_serial_) {
+      return right_camera_name_;
+    }
+
+    if (index == 0) {
+      return left_camera_name_;
+    }
+    if (index == 1) {
+      return right_camera_name_;
+    }
+
+    return "zed_" + std::to_string(index);
+  }
+
+  std::string imageTopicForCamera(const std::string & camera_name) const
+  {
+    return "/" + camera_name + "/zed_node/rgb/color/rect/image";
+  }
+
+  std::string cameraInfoTopicForCamera(const std::string & camera_name) const
+  {
+    return "/" + camera_name + "/zed_node/rgb/color/rect/camera_info";
+  }
+
+  std::string imageFrameForCamera(const std::string & camera_name) const
+  {
+    return camera_name + "_left_camera_optical_frame";
+  }
+
+  sensor_msgs::msg::CameraInfo makeCameraInfo(
+    sl::Camera & camera, const std::string & frame_id) const
+  {
+    const auto zed_info = camera.getCameraInformation();
+    const auto & calibration = zed_info.camera_configuration.calibration_parameters;
+    const auto & left = calibration.left_cam;
+
+    sensor_msgs::msg::CameraInfo msg;
+    msg.header.frame_id = frame_id;
+    msg.width = left.image_size.width != 0 ?
+      left.image_size.width : zed_info.camera_configuration.resolution.width;
+    msg.height = left.image_size.height != 0 ?
+      left.image_size.height : zed_info.camera_configuration.resolution.height;
+    msg.distortion_model = sensor_msgs::distortion_models::PLUMB_BOB;
+    msg.d.assign(5, 0.0);
+    msg.k = {
+      static_cast<double>(left.fx), 0.0, static_cast<double>(left.cx),
+      0.0, static_cast<double>(left.fy), static_cast<double>(left.cy),
+      0.0, 0.0, 1.0};
+    msg.r = {
+      1.0, 0.0, 0.0,
+      0.0, 1.0, 0.0,
+      0.0, 0.0, 1.0};
+    msg.p = {
+      static_cast<double>(left.fx), 0.0, static_cast<double>(left.cx), 0.0,
+      0.0, static_cast<double>(left.fy), static_cast<double>(left.cy), 0.0,
+      0.0, 0.0, 1.0, 0.0};
+
+    return msg;
+  }
+
+  void configureImagePublishing(CameraWorker & worker, size_t index)
+  {
+    if (!publish_images_) {
+      return;
+    }
+
+    worker.camera_name = cameraNameForConfig(worker.config, index);
+    worker.image_frame_id = imageFrameForCamera(worker.camera_name);
+    worker.camera_info = makeCameraInfo(worker.camera, worker.image_frame_id);
+    worker.image_pub = create_publisher<sensor_msgs::msg::Image>(
+      imageTopicForCamera(worker.camera_name), rclcpp::SensorDataQoS());
+    worker.camera_info_pub = create_publisher<sensor_msgs::msg::CameraInfo>(
+      cameraInfoTopicForCamera(worker.camera_name), rclcpp::SensorDataQoS());
+
+    RCLCPP_INFO(
+      get_logger(), "Publishing stream images for serial %u on %s",
+      worker.serial_number, worker.image_pub->get_topic_name());
+    RCLCPP_INFO(
+      get_logger(), "Publishing stream camera info for serial %u on %s",
+      worker.serial_number, worker.camera_info_pub->get_topic_name());
+  }
+
+  bool hasImageSubscribers(const CameraWorker & worker) const
+  {
+    if (!publish_images_ || !worker.image_pub || !worker.camera_info_pub) {
+      return false;
+    }
+
+    return worker.image_pub->get_subscription_count() > 0 ||
+           worker.camera_info_pub->get_subscription_count() > 0;
+  }
+
+  builtin_interfaces::msg::Time timeFromNanoseconds(uint64_t timestamp_ns) const
+  {
+    builtin_interfaces::msg::Time stamp;
+    stamp.sec = static_cast<int32_t>(timestamp_ns / 1000000000ULL);
+    stamp.nanosec = static_cast<uint32_t>(timestamp_ns % 1000000000ULL);
+    return stamp;
+  }
+
+  builtin_interfaces::msg::Time imageTimestamp(sl::Camera & camera)
+  {
+    const uint64_t timestamp_ns =
+      camera.getTimestamp(sl::TIME_REFERENCE::IMAGE).getNanoseconds();
+    if (
+      timestamp_ns == 0 ||
+      timestamp_ns > static_cast<uint64_t>(std::numeric_limits<int64_t>::max()))
+    {
+      return timeFromNanoseconds(static_cast<uint64_t>(now().nanoseconds()));
+    }
+
+    return timeFromNanoseconds(timestamp_ns);
+  }
+
+  void publishImage(CameraWorker & worker, rclcpp::Clock & steady_clock)
+  {
+    if (!hasImageSubscribers(worker)) {
+      return;
+    }
+
+    const auto err = worker.camera.retrieveImage(worker.image, sl::VIEW::LEFT_BGR, sl::MEM::CPU);
+    if (err != sl::ERROR_CODE::SUCCESS) {
+      RCLCPP_WARN_THROTTLE(
+        get_logger(), steady_clock, 2000,
+        "Camera serial %u image retrieval failed: %s",
+        worker.serial_number, zedErrorToString(err).c_str());
+      return;
+    }
+
+    const auto * src = reinterpret_cast<const uint8_t *>(
+      worker.image.getPtr<sl::uchar1>(sl::MEM::CPU));
+    if (src == nullptr) {
+      RCLCPP_WARN_THROTTLE(
+        get_logger(), steady_clock, 2000,
+        "Camera serial %u returned an empty image buffer", worker.serial_number);
+      return;
+    }
+
+    sensor_msgs::msg::Image image_msg;
+    image_msg.header.stamp = imageTimestamp(worker.camera);
+    image_msg.header.frame_id = worker.image_frame_id;
+    image_msg.height = worker.image.getHeight();
+    image_msg.width = worker.image.getWidth();
+    image_msg.encoding = sensor_msgs::image_encodings::BGR8;
+    image_msg.is_bigendian = false;
+    image_msg.step = image_msg.width * 3;
+
+    const size_t src_step = worker.image.getStepBytes(sl::MEM::CPU);
+    if (src_step < image_msg.step) {
+      RCLCPP_WARN_THROTTLE(
+        get_logger(), steady_clock, 2000,
+        "Camera serial %u image step is smaller than expected", worker.serial_number);
+      return;
+    }
+
+    image_msg.data.resize(static_cast<size_t>(image_msg.height) * image_msg.step);
+    for (uint32_t row = 0; row < image_msg.height; ++row) {
+      std::memcpy(
+        image_msg.data.data() + static_cast<size_t>(row) * image_msg.step,
+        src + static_cast<size_t>(row) * src_step,
+        image_msg.step);
+    }
+
+    auto camera_info_msg = worker.camera_info;
+    camera_info_msg.header.stamp = image_msg.header.stamp;
+    camera_info_msg.width = image_msg.width;
+    camera_info_msg.height = image_msg.height;
+
+    worker.image_pub->publish(std::move(image_msg));
+    worker.camera_info_pub->publish(camera_info_msg);
+  }
+
   void configureRuntimeParameters()
   {
     sender_runtime_params_.detection_confidence_threshold =
@@ -435,6 +634,8 @@ private:
           "Failed to open ZED camera serial " + std::to_string(worker->serial_number) +
           ": " + zedErrorToString(err));
       }
+
+      configureImagePublishing(*worker, idx);
 
       sl::PositionalTrackingParameters tracking_params;
       tracking_params.set_as_static = set_as_static_;
@@ -544,6 +745,8 @@ private:
           "Camera serial %u grab failed: %s",
           worker.serial_number, zedErrorToString(err).c_str());
         std::this_thread::sleep_for(std::chrono::milliseconds(2));
+      } else {
+        publishImage(worker, steady_clock);
       }
     }
   }
@@ -767,6 +970,8 @@ private:
   std::string output_topic_;
   std::string publish_frame_id_;
   std::string stream_address_;
+  std::string left_camera_name_;
+  std::string right_camera_name_;
 
   sl::BODY_TRACKING_MODEL body_model_ = sl::BODY_TRACKING_MODEL::HUMAN_BODY_FAST;
   sl::BODY_FORMAT body_format_ = sl::BODY_FORMAT::BODY_38;
@@ -793,6 +998,7 @@ private:
   int candidate_switch_count_ = 0;
   double fusion_publish_rate_hz_ = 30.0;
   bool single_body_enabled_ = true;
+  bool publish_images_ = true;
   bool sender_tracking_enabled_ = false;
   bool fusion_tracking_enabled_ = true;
   bool body_fitting_enabled_ = false;
