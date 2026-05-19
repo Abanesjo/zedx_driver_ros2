@@ -48,7 +48,7 @@ SHELL ["/bin/bash", "-c"]
 
 RUN rosdep init
 RUN rosdep update
-RUN rosdep install --from-paths src --ignore-src -r -y
+RUN rosdep install --from-paths src --ignore-src -r -y --skip-keys scout_description
 
 RUN source /opt/ros/humble/setup.bash && \
     colcon build --symlink-install --parallel-workers $(( $(nproc) / 2 )) \
@@ -62,4 +62,5 @@ COPY docker/entrypoint.sh /entrypoint.sh
 
 RUN chmod +x /entrypoint.sh
 
-CMD ["/entrypoint.sh"]
+ENTRYPOINT ["/entrypoint.sh"]
+CMD ["sleep", "infinity"]

@@ -2,12 +2,15 @@
 set -e
 
 source /opt/ros/humble/setup.bash
-source /workspace/ros2_ws/install/setup.bash
+
+if [ -f /workspace/ros2_ws/install/setup.bash ]; then
+    source /workspace/ros2_ws/install/setup.bash
+fi
 
 cd /workspace/ros2_ws
 
 apt update
-rosdep install --from-paths src --ignore-src -r -y
+rosdep install --from-paths src --ignore-src -r -y --skip-keys scout_description
 colcon build --symlink-install --parallel-workers $(( $(nproc) / 2 ))
 source /workspace/ros2_ws/install/setup.bash
 
@@ -26,4 +29,8 @@ export ZED_BOX_IP="192.168.123.200"
 EOF
 fi
 
-exec bash
+if [ "$#" -eq 0 ]; then
+    set -- sleep infinity
+fi
+
+exec "$@"
