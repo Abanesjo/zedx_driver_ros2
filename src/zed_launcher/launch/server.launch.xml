@@ -1,5 +1,5 @@
 <launch>
-  <arg name="grab_frame_rate" default="60" />
+  <arg name="grab_frame_rate" default="30" />
   <arg name="stream_target_framerate" default="0" />
 
   <arg name="camera_model" default="$(env CAM_MODEL zedx)" />
