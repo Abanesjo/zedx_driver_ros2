@@ -1,6 +1,6 @@
 <launch>
-  <arg name="camera_fps" default="30" />
-  <arg name="fusion_publish_rate_hz" default="30.0" />
+  <arg name="camera_fps" default="60" />
+  <arg name="fusion_publish_rate_hz" default="60.0" />
 
   <arg name="role" default="local" />
   <arg name="input_mode" default="stream" />
@@ -31,7 +31,7 @@
   <arg name="overlay_min_confidence" default="$(var confidence_threshold)" />
   <arg name="overlay_max_skeleton_age_sec" default="0.5" />
   <!-- Options: PERFORMANCE, QUALITY, ULTRA, NEURAL_LIGHT, NEURAL, NEURAL_PLUS -->
-  <arg name="depth_mode" default="NEURAL_PLUS" />
+  <arg name="depth_mode" default="NEURAL" />
   <arg name="fusion_reference_frame" default="BASELINK" />
   <arg name="fusion_skeleton_smoothing" default="0.0" />
   <arg name="fusion_minimum_allowed_cameras" default="1" />
