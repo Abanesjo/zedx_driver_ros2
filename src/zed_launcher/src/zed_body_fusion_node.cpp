@@ -5,6 +5,7 @@
 #include <atomic>
 #include <chrono>
 #include <cctype>
+#include <iterator>
 #include <memory>
 #include <sstream>
 #include <string>
@@ -151,7 +152,7 @@ void copyVector3(RosArray & dest, const SlVector & src)
 template<typename RosArray, typename SlVector>
 void copyFlat(RosArray & dest, const SlVector & src)
 {
-  const auto count = std::min<size_t>(dest.size(), src.size());
+  const auto count = std::min<size_t>(std::size(dest), std::size(src));
   for (size_t i = 0; i < count; ++i) {
     dest[i] = static_cast<float>(src[i]);
   }
@@ -222,11 +223,13 @@ public:
     RCLCPP_INFO(get_logger(), "Loading ZED Fusion configuration: %s", fusion_config_path_.c_str());
     fusion_configs_ = sl::readFusionConfigurationFile(
       fusion_config_path_, kRosCoordinateSystem, kRosUnits);
-    if (fusion_configs_.size() < 2) {
+    if (fusion_configs_.size() != 2) {
       throw std::runtime_error(
-        "Fusion configuration must contain at least two cameras, found " +
+        "Fusion configuration must contain exactly two cameras, found " +
         std::to_string(fusion_configs_.size()));
     }
+
+    configureRuntimeParameters();
 
     try {
       startCameraPublishers();
@@ -260,7 +263,7 @@ private:
   void loadParameters()
   {
     role_ = declare_parameter<std::string>("role", "local");
-    input_mode_ = declare_parameter<std::string>("input_mode", "live");
+    input_mode_ = declare_parameter<std::string>("input_mode", "stream");
     fusion_config_path_ = declare_parameter<std::string>("fusion_config_path", "");
     output_topic_ = declare_parameter<std::string>("output_topic", "body_trk/skeletons");
     publish_frame_id_ = declare_parameter<std::string>("publish_frame_id", "zed_fusion_map");
@@ -287,7 +290,7 @@ private:
     sdk_gpu_id_ = declare_parameter<int>("sdk_gpu_id", -1);
     fusion_publish_rate_hz_ = declare_parameter<double>("fusion_publish_rate_hz", 30.0);
 
-    sender_tracking_enabled_ = declare_parameter<bool>("sender_tracking_enabled", true);
+    sender_tracking_enabled_ = declare_parameter<bool>("sender_tracking_enabled", false);
     fusion_tracking_enabled_ = declare_parameter<bool>("fusion_tracking_enabled", true);
     body_fitting_enabled_ = declare_parameter<bool>("body_fitting_enabled", false);
     set_as_static_ = declare_parameter<bool>("set_as_static", true);
@@ -303,6 +306,18 @@ private:
     }
     if (camera_fps_ <= 0) {
       throw std::runtime_error("camera_fps must be positive");
+    }
+    if (left_stream_port_ <= 0 || left_stream_port_ > 65535) {
+      throw std::runtime_error("left_stream_port must be in the range [1, 65535]");
+    }
+    if (right_stream_port_ <= 0 || right_stream_port_ > 65535) {
+      throw std::runtime_error("right_stream_port must be in the range [1, 65535]");
+    }
+    if (left_stream_port_ == right_stream_port_) {
+      throw std::runtime_error("left_stream_port and right_stream_port must be different");
+    }
+    if (left_serial_ > 0 && right_serial_ > 0 && left_serial_ == right_serial_) {
+      throw std::runtime_error("left_serial and right_serial must be different");
     }
   }
 
@@ -335,6 +350,14 @@ private:
       return right_stream_port_;
     }
 
+    const bool strict_serial_mapping = left_serial_ > 0 && right_serial_ > 0;
+    if (strict_serial_mapping) {
+      throw std::runtime_error(
+        "Calibration camera serial " + std::to_string(serial) +
+        " does not match configured left_serial " + std::to_string(left_serial_) +
+        " or right_serial " + std::to_string(right_serial_));
+    }
+
     if (index == 0) {
       return left_stream_port_;
     }
@@ -344,6 +367,20 @@ private:
 
     throw std::runtime_error(
       "No stream port configured for camera serial " + std::to_string(serial));
+  }
+
+  void configureRuntimeParameters()
+  {
+    sender_runtime_params_.detection_confidence_threshold =
+      static_cast<float>(confidence_threshold_);
+    sender_runtime_params_.skeleton_smoothing = 0.0f;
+
+    fusion_runtime_params_.skeleton_smoothing =
+      static_cast<float>(fusion_skeleton_smoothing_);
+    fusion_runtime_params_.skeleton_minimum_allowed_camera =
+      fusion_minimum_allowed_cameras_;
+    fusion_runtime_params_.skeleton_minimum_allowed_keypoints =
+      fusion_minimum_allowed_keypoints_;
   }
 
   void startCameraPublishers()
@@ -405,7 +442,7 @@ private:
       body_params.detection_model = body_model_;
       body_params.body_format = body_format_;
       body_params.enable_tracking = sender_tracking_enabled_;
-      body_params.enable_body_fitting = body_fitting_enabled_;
+      body_params.enable_body_fitting = false;
       body_params.enable_segmentation = false;
       body_params.allow_reduced_precision_inference = allow_reduced_precision_inference_;
 
@@ -413,6 +450,13 @@ private:
       if (err != sl::ERROR_CODE::SUCCESS) {
         throw std::runtime_error(
           "Failed to enable body tracking for camera serial " +
+          std::to_string(worker->serial_number) + ": " + zedErrorToString(err));
+      }
+
+      err = worker->camera.setBodyTrackingRuntimeParameters(sender_runtime_params_);
+      if (err != sl::ERROR_CODE::SUCCESS) {
+        throw std::runtime_error(
+          "Failed to set body tracking runtime parameters for camera serial " +
           std::to_string(worker->serial_number) + ": " + zedErrorToString(err));
       }
 
@@ -472,38 +516,18 @@ private:
         "Failed to enable Fusion body tracking: " + fusionErrorToString(fusion_err));
     }
 
-    fusion_runtime_params_.skeleton_smoothing =
-      static_cast<float>(fusion_skeleton_smoothing_);
-    fusion_runtime_params_.skeleton_minimum_allowed_camera =
-      fusion_minimum_allowed_cameras_;
-    fusion_runtime_params_.skeleton_minimum_allowed_keypoints =
-      fusion_minimum_allowed_keypoints_;
-
-    sender_runtime_params_.detection_confidence_threshold =
-      static_cast<float>(confidence_threshold_);
-    sender_runtime_params_.skeleton_smoothing = 0.0f;
-
     RCLCPP_INFO(
-      get_logger(), "ZED body Fusion ready; publishing %s/%s in frame '%s'",
-      get_fully_qualified_name(), output_topic_.c_str(), publish_frame_id_.c_str());
+      get_logger(), "ZED body Fusion ready; publishing %s in frame '%s'",
+      pub_bodies_->get_topic_name(), publish_frame_id_.c_str());
   }
 
   void runCameraWorker(CameraWorker & worker)
   {
-    sl::Bodies bodies;
     rclcpp::Clock steady_clock(RCL_STEADY_TIME);
 
     while (rclcpp::ok() && worker.running.load()) {
       auto err = worker.camera.grab();
-      if (err == sl::ERROR_CODE::SUCCESS) {
-        err = worker.camera.retrieveBodies(bodies, sender_runtime_params_);
-        if (err != sl::ERROR_CODE::SUCCESS) {
-          RCLCPP_WARN_THROTTLE(
-            get_logger(), steady_clock, 2000,
-            "Camera serial %u retrieveBodies failed: %s",
-            worker.serial_number, zedErrorToString(err).c_str());
-        }
-      } else {
+      if (err != sl::ERROR_CODE::SUCCESS) {
         RCLCPP_WARN_THROTTLE(
           get_logger(), steady_clock, 2000,
           "Camera serial %u grab failed: %s",
@@ -511,8 +535,6 @@ private:
         std::this_thread::sleep_for(std::chrono::milliseconds(2));
       }
     }
-
-    bodies.body_list.clear();
   }
 
   void processFusion()
@@ -648,7 +670,7 @@ private:
   int right_serial_ = 49967328;
   int sdk_gpu_id_ = -1;
   double fusion_publish_rate_hz_ = 30.0;
-  bool sender_tracking_enabled_ = true;
+  bool sender_tracking_enabled_ = false;
   bool fusion_tracking_enabled_ = true;
   bool body_fitting_enabled_ = false;
   bool set_as_static_ = true;

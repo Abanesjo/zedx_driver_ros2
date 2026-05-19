@@ -1,5 +1,11 @@
 <launch>
   <arg name="role" default="local" />
+  <arg name="input_mode" default="stream" />
+  <arg name="stream_address" default="$(env ZED_BOX_IP 127.0.0.1)" />
+  <arg name="left_stream_port" default="30000" />
+  <arg name="right_stream_port" default="30002" />
+  <arg name="left_serial" default="41235597" />
+  <arg name="right_serial" default="49967328" />
   <arg
     name="fusion_config_path"
     default="$(find-pkg-share zed_launcher)/calibration/calibration.json"
@@ -17,7 +23,7 @@
   <arg name="fusion_skeleton_smoothing" default="0.0" />
   <arg name="fusion_minimum_allowed_cameras" default="-1" />
   <arg name="fusion_minimum_allowed_keypoints" default="-1" />
-  <arg name="sender_tracking_enabled" default="true" />
+  <arg name="sender_tracking_enabled" default="false" />
   <arg name="fusion_tracking_enabled" default="true" />
   <arg name="body_fitting_enabled" default="false" />
   <arg name="set_as_static" default="true" />
@@ -38,6 +44,12 @@
     output="screen"
   >
     <param name="role" value="$(var role)" />
+    <param name="input_mode" value="$(var input_mode)" />
+    <param name="stream_address" value="$(var stream_address)" />
+    <param name="left_stream_port" value="$(var left_stream_port)" />
+    <param name="right_stream_port" value="$(var right_stream_port)" />
+    <param name="left_serial" value="$(var left_serial)" />
+    <param name="right_serial" value="$(var right_serial)" />
     <param name="fusion_config_path" value="$(var fusion_config_path)" />
     <param name="body_model" value="$(var body_model)" />
     <param name="body_format" value="$(var body_format)" />

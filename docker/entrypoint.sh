@@ -2,17 +2,22 @@
 set -e
 
 source /opt/ros/humble/setup.bash
-
 if [ -f /workspace/ros2_ws/install/setup.bash ]; then
-    source /workspace/ros2_ws/install/setup.bash
+    source /workspace/ros2_ws/install/setup.bash || \
+        echo "[entrypoint] Warning: failed to source existing workspace setup; continuing." >&2
 fi
 
 cd /workspace/ros2_ws
 
 apt update
 rosdep install --from-paths src --ignore-src -r -y --skip-keys scout_description
-colcon build --symlink-install --parallel-workers $(( $(nproc) / 2 ))
-source /workspace/ros2_ws/install/setup.bash
+if ! colcon build --symlink-install --parallel-workers $(( $(nproc) / 2 )); then
+    echo "[entrypoint] Warning: colcon build failed; continuing so the container stays available." >&2
+fi
+if [ -f /workspace/ros2_ws/install/setup.bash ]; then
+    source /workspace/ros2_ws/install/setup.bash || \
+        echo "[entrypoint] Warning: failed to source workspace setup after build; continuing." >&2
+fi
 
 if ! grep -qxF "#Entrypoint Setup" ~/.bashrc; then
     cat <<'EOF' >> ~/.bashrc
@@ -29,8 +34,4 @@ export ZED_BOX_IP="192.168.123.200"
 EOF
 fi
 
-if [ "$#" -eq 0 ]; then
-    set -- sleep infinity
-fi
-
-exec "$@"
+exec bash
