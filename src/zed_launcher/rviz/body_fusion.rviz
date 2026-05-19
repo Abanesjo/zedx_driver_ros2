@@ -35,7 +35,7 @@ Visualization Manager:
         Durability Policy: Volatile
         Filter size: 10
         History Policy: Keep Last
-        Reliability Policy: Reliable
+        Reliability Policy: Best Effort
         Value: /zed_fusion/body_trk/skeletons
       Transparency: 0.25
       Value: true
@@ -53,7 +53,7 @@ Visualization Manager:
         Durability Policy: Volatile
         Filter size: 10
         History Policy: Keep Last
-        Reliability Policy: Reliable
+        Reliability Policy: Best Effort
         Value: /zed_left/zed_node/body_trk/skeletons
       Transparency: 0.45
       Value: true
@@ -71,7 +71,7 @@ Visualization Manager:
         Durability Policy: Volatile
         Filter size: 10
         History Policy: Keep Last
-        Reliability Policy: Reliable
+        Reliability Policy: Best Effort
         Value: /zed_right/zed_node/body_trk/skeletons
       Transparency: 0.45
       Value: true

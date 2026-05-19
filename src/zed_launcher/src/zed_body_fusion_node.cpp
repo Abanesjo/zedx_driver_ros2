@@ -1184,7 +1184,8 @@ private:
     return current_index;
   }
 
-  void copyBodyToRosObject(const sl::BodyData & body, zed_msgs::msg::Object & object)
+  void copyBodyToRosObject(
+    const sl::BodyData & body, zed_msgs::msg::Object & object, bool tracking_available)
   {
     object.label = "Body_" + std::to_string(body.id);
     object.sublabel = "";
@@ -1193,7 +1194,7 @@ private:
     copyVector3(object.position, body.position);
     copyFlat(object.position_covariance, body.position_covariance);
     copyVector3(object.velocity, body.velocity);
-    object.tracking_available = fusion_tracking_enabled_;
+    object.tracking_available = tracking_available;
     object.tracking_state = static_cast<int8_t>(body.tracking_state);
     object.action_state = static_cast<int8_t>(body.action_state);
 
@@ -1237,17 +1238,21 @@ private:
       if (selected_index >= 0) {
         msg.objects.resize(1);
         copyBodyToRosObject(
-          bodies.body_list[static_cast<size_t>(selected_index)], msg.objects[0]);
+          bodies.body_list[static_cast<size_t>(selected_index)], msg.objects[0],
+          fusion_tracking_enabled_);
       }
       return msg;
     }
+
+    const bool tracking_available = frame_id == publish_frame_id_ ?
+      fusion_tracking_enabled_ : sender_tracking_enabled_;
 
     for (const auto & body : bodies.body_list) {
       if (!bodyPassesRosFilter(body)) {
         continue;
       }
       auto & object = msg.objects.emplace_back();
-      copyBodyToRosObject(body, object);
+      copyBodyToRosObject(body, object, tracking_available);
     }
 
     return msg;
