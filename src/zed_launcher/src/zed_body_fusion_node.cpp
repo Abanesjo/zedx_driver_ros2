@@ -335,12 +335,12 @@ private:
     input_mode_ = declare_parameter<std::string>("input_mode", "stream");
     fusion_config_path_ = declare_parameter<std::string>("fusion_config_path", "");
     output_topic_ = declare_parameter<std::string>("output_topic", "body_trk/skeletons");
-    publish_frame_id_ = declare_parameter<std::string>("publish_frame_id", "zed_fusion_map");
+    publish_frame_id_ = declare_parameter<std::string>("publish_frame_id", "fusion_world");
     stream_address_ = declare_parameter<std::string>("stream_address", "");
     left_camera_name_ = declare_parameter<std::string>("left_camera_name", "zed_left");
     right_camera_name_ = declare_parameter<std::string>("right_camera_name", "zed_right");
 
-    body_model_ = parseBodyModel(declare_parameter<std::string>("body_model", "HUMAN_BODY_FAST"));
+    body_model_ = parseBodyModel(declare_parameter<std::string>("body_model", "HUMAN_BODY_ACCURATE"));
     body_format_ = parseBodyFormat(declare_parameter<std::string>("body_format", "BODY_38"));
     depth_mode_ = parseDepthMode(declare_parameter<std::string>("depth_mode", "NEURAL_LIGHT"));
     camera_resolution_ = parseResolution(declare_parameter<std::string>("camera_resolution", "HD1080"));
@@ -352,7 +352,7 @@ private:
       declare_parameter<double>("single_body_switch_margin", 10.0);
     fusion_skeleton_smoothing_ = declare_parameter<double>("fusion_skeleton_smoothing", 0.0);
     fusion_minimum_allowed_cameras_ =
-      declare_parameter<int>("fusion_minimum_allowed_cameras", -1);
+      declare_parameter<int>("fusion_minimum_allowed_cameras", 1);
     fusion_minimum_allowed_keypoints_ =
       declare_parameter<int>("fusion_minimum_allowed_keypoints", 7);
     camera_fps_ = declare_parameter<int>("camera_fps", 60);
@@ -1289,7 +1289,7 @@ private:
   std::string left_camera_name_;
   std::string right_camera_name_;
 
-  sl::BODY_TRACKING_MODEL body_model_ = sl::BODY_TRACKING_MODEL::HUMAN_BODY_FAST;
+  sl::BODY_TRACKING_MODEL body_model_ = sl::BODY_TRACKING_MODEL::HUMAN_BODY_ACCURATE;
   sl::BODY_FORMAT body_format_ = sl::BODY_FORMAT::BODY_38;
   sl::DEPTH_MODE depth_mode_ = sl::DEPTH_MODE::NEURAL_LIGHT;
   sl::RESOLUTION camera_resolution_ = sl::RESOLUTION::HD1080;
@@ -1302,7 +1302,7 @@ private:
   double overlay_max_skeleton_age_sec_ = 0.5;
   double single_body_switch_margin_ = 10.0;
   double fusion_skeleton_smoothing_ = 0.0;
-  int fusion_minimum_allowed_cameras_ = -1;
+  int fusion_minimum_allowed_cameras_ = 1;
   int fusion_minimum_allowed_keypoints_ = 7;
   int camera_fps_ = 60;
   int left_stream_port_ = 30000;
