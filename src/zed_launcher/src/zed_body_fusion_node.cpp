@@ -5,6 +5,7 @@
 #include <atomic>
 #include <chrono>
 #include <cctype>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <iterator>
@@ -267,10 +268,12 @@ private:
     sensor_msgs::msg::CameraInfo camera_info;
     rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr image_pub;
     rclcpp::Publisher<sensor_msgs::msg::CameraInfo>::SharedPtr camera_info_pub;
+    rclcpp::Publisher<zed_msgs::msg::ObjectsStamped>::SharedPtr bodies_pub;
     std::thread thread;
     std::atomic_bool running{false};
     std::string camera_name;
     std::string image_frame_id;
+    std::string bodies_frame_id;
     unsigned int serial_number = 0;
   };
 
@@ -288,25 +291,25 @@ private:
     body_model_ = parseBodyModel(declare_parameter<std::string>("body_model", "HUMAN_BODY_FAST"));
     body_format_ = parseBodyFormat(declare_parameter<std::string>("body_format", "BODY_38"));
     depth_mode_ = parseDepthMode(declare_parameter<std::string>("depth_mode", "NEURAL_LIGHT"));
-    camera_resolution_ = parseResolution(declare_parameter<std::string>("camera_resolution", "HD720"));
+    camera_resolution_ = parseResolution(declare_parameter<std::string>("camera_resolution", "HD1080"));
     fusion_reference_frame_ = parseFusionReferenceFrame(
       declare_parameter<std::string>("fusion_reference_frame", "BASELINK"));
 
-    confidence_threshold_ = declare_parameter<double>("confidence_threshold", 40.0);
+    confidence_threshold_ = declare_parameter<double>("confidence_threshold", 70.0);
     single_body_switch_margin_ =
       declare_parameter<double>("single_body_switch_margin", 10.0);
     fusion_skeleton_smoothing_ = declare_parameter<double>("fusion_skeleton_smoothing", 0.0);
     fusion_minimum_allowed_cameras_ =
       declare_parameter<int>("fusion_minimum_allowed_cameras", -1);
     fusion_minimum_allowed_keypoints_ =
-      declare_parameter<int>("fusion_minimum_allowed_keypoints", -1);
-    camera_fps_ = declare_parameter<int>("camera_fps", 30);
+      declare_parameter<int>("fusion_minimum_allowed_keypoints", 7);
+    camera_fps_ = declare_parameter<int>("camera_fps", 60);
     left_stream_port_ = declare_parameter<int>("left_stream_port", 30000);
     right_stream_port_ = declare_parameter<int>("right_stream_port", 30002);
     left_serial_ = declare_parameter<int>("left_serial", 41235597);
     right_serial_ = declare_parameter<int>("right_serial", 49967328);
     sdk_gpu_id_ = declare_parameter<int>("sdk_gpu_id", -1);
-    fusion_publish_rate_hz_ = declare_parameter<double>("fusion_publish_rate_hz", 30.0);
+    fusion_publish_rate_hz_ = declare_parameter<double>("fusion_publish_rate_hz", 60.0);
     single_body_switch_frames_ =
       declare_parameter<int>("single_body_switch_frames", 5);
 
@@ -325,6 +328,9 @@ private:
     }
     if (fusion_publish_rate_hz_ <= 0.0) {
       throw std::runtime_error("fusion_publish_rate_hz must be positive");
+    }
+    if (confidence_threshold_ < 0.0 || confidence_threshold_ > 100.0) {
+      throw std::runtime_error("confidence_threshold must be in the range [0, 100]");
     }
     if (camera_fps_ <= 0) {
       throw std::runtime_error("camera_fps must be positive");
@@ -431,6 +437,11 @@ private:
     return "/" + camera_name + "/zed_node/rgb/color/rect/camera_info";
   }
 
+  std::string bodiesTopicForCamera(const std::string & camera_name) const
+  {
+    return "/" + camera_name + "/zed_node/body_trk/skeletons";
+  }
+
   std::string imageFrameForCamera(const std::string & camera_name) const
   {
     return camera_name + "_left_camera_optical_frame";
@@ -475,6 +486,7 @@ private:
 
     worker.camera_name = cameraNameForConfig(worker.config, index);
     worker.image_frame_id = imageFrameForCamera(worker.camera_name);
+    worker.bodies_frame_id = worker.image_frame_id;
     worker.camera_info = makeCameraInfo(worker.camera, worker.image_frame_id);
     worker.image_pub = create_publisher<sensor_msgs::msg::Image>(
       imageTopicForCamera(worker.camera_name), rclcpp::SensorDataQoS());
@@ -487,6 +499,19 @@ private:
     RCLCPP_INFO(
       get_logger(), "Publishing stream camera info for serial %u on %s",
       worker.serial_number, worker.camera_info_pub->get_topic_name());
+  }
+
+  void configurePerCameraBodyPublishing(CameraWorker & worker, size_t index)
+  {
+    worker.camera_name = cameraNameForConfig(worker.config, index);
+    worker.image_frame_id = imageFrameForCamera(worker.camera_name);
+    worker.bodies_frame_id = worker.image_frame_id;
+    worker.bodies_pub = create_publisher<zed_msgs::msg::ObjectsStamped>(
+      bodiesTopicForCamera(worker.camera_name), rclcpp::SensorDataQoS());
+
+    RCLCPP_INFO(
+      get_logger(), "Publishing per-camera skeletons for serial %u on %s",
+      worker.serial_number, worker.bodies_pub->get_topic_name());
   }
 
   bool hasImageSubscribers(const CameraWorker & worker) const
@@ -635,6 +660,7 @@ private:
           ": " + zedErrorToString(err));
       }
 
+      configurePerCameraBodyPublishing(*worker, idx);
       configureImagePublishing(*worker, idx);
 
       sl::PositionalTrackingParameters tracking_params;
@@ -778,6 +804,46 @@ private:
     }
 
     pub_bodies_->publish(toRosMessage(bodies));
+    publishPerCameraBodies();
+  }
+
+  bool bodyPassesConfidence(const sl::BodyData & body) const
+  {
+    return body.confidence >= static_cast<float>(confidence_threshold_);
+  }
+
+  int validKeypointCount(const sl::BodyData & body) const
+  {
+    int count_2d = 0;
+    for (const auto & keypoint : body.keypoint_2d) {
+      if (std::isfinite(keypoint[0]) && std::isfinite(keypoint[1]) && keypoint[0] >= 0.0f &&
+        keypoint[1] >= 0.0f)
+      {
+        ++count_2d;
+      }
+    }
+
+    int count_3d = 0;
+    for (const auto & keypoint : body.keypoint) {
+      if (std::isfinite(keypoint[0]) && std::isfinite(keypoint[1]) &&
+        std::isfinite(keypoint[2]))
+      {
+        ++count_3d;
+      }
+    }
+
+    return std::max(count_2d, count_3d);
+  }
+
+  bool bodyPassesRosFilter(const sl::BodyData & body) const
+  {
+    if (!bodyPassesConfidence(body)) {
+      return false;
+    }
+    if (fusion_minimum_allowed_keypoints_ <= 0) {
+      return true;
+    }
+    return validKeypointCount(body) >= fusion_minimum_allowed_keypoints_;
   }
 
   int bestConfidenceIndex(const std::vector<sl::BodyData> & bodies) const
@@ -786,14 +852,20 @@ private:
       return -1;
     }
 
-    return static_cast<int>(
-      std::distance(
-        bodies.begin(),
-        std::max_element(
-          bodies.begin(), bodies.end(),
-          [](const sl::BodyData & lhs, const sl::BodyData & rhs) {
-            return lhs.confidence < rhs.confidence;
-          })));
+    int best_index = -1;
+    float best_confidence = -1.0f;
+    for (size_t idx = 0; idx < bodies.size(); ++idx) {
+      const auto & body = bodies[idx];
+      if (!bodyPassesRosFilter(body)) {
+        continue;
+      }
+      if (body.confidence > best_confidence) {
+        best_confidence = body.confidence;
+        best_index = static_cast<int>(idx);
+      }
+    }
+
+    return best_index;
   }
 
   int bodyIndexById(const std::vector<sl::BodyData> & bodies, int body_id) const
@@ -804,8 +876,8 @@ private:
 
     const auto it = std::find_if(
       bodies.begin(), bodies.end(),
-      [body_id](const sl::BodyData & body) {
-        return body.id == body_id;
+      [this, body_id](const sl::BodyData & body) {
+        return body.id == body_id && bodyPassesRosFilter(body);
       });
 
     if (it == bodies.end()) {
@@ -912,11 +984,17 @@ private:
 
   zed_msgs::msg::ObjectsStamped toRosMessage(const sl::Bodies & bodies)
   {
+    return toRosMessage(bodies, publish_frame_id_, single_body_enabled_);
+  }
+
+  zed_msgs::msg::ObjectsStamped toRosMessage(
+    const sl::Bodies & bodies, const std::string & frame_id, bool apply_single_body_filter)
+  {
     zed_msgs::msg::ObjectsStamped msg;
     msg.header.stamp = now();
-    msg.header.frame_id = publish_frame_id_;
+    msg.header.frame_id = frame_id;
 
-    if (single_body_enabled_) {
+    if (apply_single_body_filter) {
       const int selected_index = selectedBodyIndex(bodies.body_list);
       if (selected_index >= 0) {
         msg.objects.resize(1);
@@ -926,12 +1004,44 @@ private:
       return msg;
     }
 
-    msg.objects.resize(bodies.body_list.size());
-    for (size_t idx = 0; idx < bodies.body_list.size(); ++idx) {
-      copyBodyToRosObject(bodies.body_list[idx], msg.objects[idx]);
+    for (const auto & body : bodies.body_list) {
+      if (!bodyPassesRosFilter(body)) {
+        continue;
+      }
+      auto & object = msg.objects.emplace_back();
+      copyBodyToRosObject(body, object);
     }
 
     return msg;
+  }
+
+  void publishPerCameraBodies()
+  {
+    for (const auto & worker : workers_) {
+      if (!worker->bodies_pub || worker->bodies_pub->get_subscription_count() == 0) {
+        continue;
+      }
+
+      sl::CameraIdentifier uuid;
+      uuid.sn = worker->serial_number;
+
+      sl::Bodies camera_bodies;
+      const auto fusion_err = fusion_.retrieveBodies(
+        camera_bodies, fusion_runtime_params_, uuid, fusion_reference_frame_);
+      if (fusion_err != sl::FUSION_ERROR_CODE::SUCCESS) {
+        RCLCPP_WARN_THROTTLE(
+          get_logger(), *get_clock(), 2000,
+          "Fusion retrieveBodies failed for camera serial %u: %s",
+          worker->serial_number, fusionErrorToString(fusion_err).c_str());
+        continue;
+      }
+      if (!camera_bodies.is_new) {
+        continue;
+      }
+
+      worker->bodies_pub->publish(
+        toRosMessage(camera_bodies, worker->bodies_frame_id, false));
+    }
   }
 
   void shutdown()
@@ -976,17 +1086,17 @@ private:
   sl::BODY_TRACKING_MODEL body_model_ = sl::BODY_TRACKING_MODEL::HUMAN_BODY_FAST;
   sl::BODY_FORMAT body_format_ = sl::BODY_FORMAT::BODY_38;
   sl::DEPTH_MODE depth_mode_ = sl::DEPTH_MODE::NEURAL_LIGHT;
-  sl::RESOLUTION camera_resolution_ = sl::RESOLUTION::HD720;
+  sl::RESOLUTION camera_resolution_ = sl::RESOLUTION::HD1080;
   sl::FUSION_REFERENCE_FRAME fusion_reference_frame_ = sl::FUSION_REFERENCE_FRAME::BASELINK;
   sl::BodyTrackingRuntimeParameters sender_runtime_params_;
   sl::BodyTrackingFusionRuntimeParameters fusion_runtime_params_;
 
-  double confidence_threshold_ = 40.0;
+  double confidence_threshold_ = 70.0;
   double single_body_switch_margin_ = 10.0;
   double fusion_skeleton_smoothing_ = 0.0;
   int fusion_minimum_allowed_cameras_ = -1;
-  int fusion_minimum_allowed_keypoints_ = -1;
-  int camera_fps_ = 30;
+  int fusion_minimum_allowed_keypoints_ = 7;
+  int camera_fps_ = 60;
   int left_stream_port_ = 30000;
   int right_stream_port_ = 30002;
   int left_serial_ = 41235597;
@@ -996,7 +1106,7 @@ private:
   int selected_body_id_ = -1;
   int candidate_body_id_ = -1;
   int candidate_switch_count_ = 0;
-  double fusion_publish_rate_hz_ = 30.0;
+  double fusion_publish_rate_hz_ = 60.0;
   bool single_body_enabled_ = true;
   bool publish_images_ = true;
   bool sender_tracking_enabled_ = false;
