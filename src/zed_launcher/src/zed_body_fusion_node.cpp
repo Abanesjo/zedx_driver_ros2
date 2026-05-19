@@ -328,7 +328,6 @@ private:
     std::atomic_bool running{false};
     std::string camera_name;
     std::string image_frame_id;
-    std::string bodies_frame_id;
     bool latest_bodies_valid = false;
     unsigned int serial_number = 0;
   };
@@ -599,7 +598,6 @@ private:
 
     worker.camera_name = cameraNameForConfig(worker.config, index);
     worker.image_frame_id = imageFrameForCamera(worker.camera_name);
-    worker.bodies_frame_id = worker.image_frame_id;
     worker.camera_info = makeCameraInfo(worker.camera, worker.image_frame_id);
     worker.image_pub = create_publisher<sensor_msgs::msg::Image>(
       imageTopicForCamera(worker.camera_name), rclcpp::SensorDataQoS());
@@ -634,7 +632,6 @@ private:
   {
     worker.camera_name = cameraNameForConfig(worker.config, index);
     worker.image_frame_id = imageFrameForCamera(worker.camera_name);
-    worker.bodies_frame_id = worker.image_frame_id;
     worker.bodies_pub = create_publisher<zed_msgs::msg::ObjectsStamped>(
       bodiesTopicForCamera(worker.camera_name), rclcpp::SensorDataQoS());
 
@@ -1223,11 +1220,13 @@ private:
 
   zed_msgs::msg::ObjectsStamped toRosMessage(const sl::Bodies & bodies)
   {
-    return toRosMessage(bodies, publish_frame_id_, single_body_enabled_);
+    return toRosMessage(
+      bodies, publish_frame_id_, single_body_enabled_, fusion_tracking_enabled_);
   }
 
   zed_msgs::msg::ObjectsStamped toRosMessage(
-    const sl::Bodies & bodies, const std::string & frame_id, bool apply_single_body_filter)
+    const sl::Bodies & bodies, const std::string & frame_id, bool apply_single_body_filter,
+    bool tracking_available)
   {
     zed_msgs::msg::ObjectsStamped msg;
     msg.header.stamp = now();
@@ -1239,13 +1238,10 @@ private:
         msg.objects.resize(1);
         copyBodyToRosObject(
           bodies.body_list[static_cast<size_t>(selected_index)], msg.objects[0],
-          fusion_tracking_enabled_);
+          tracking_available);
       }
       return msg;
     }
-
-    const bool tracking_available = frame_id == publish_frame_id_ ?
-      fusion_tracking_enabled_ : sender_tracking_enabled_;
 
     for (const auto & body : bodies.body_list) {
       if (!bodyPassesRosFilter(body)) {
@@ -1285,7 +1281,10 @@ private:
         continue;
       }
 
-      auto msg = toRosMessage(camera_bodies, worker->bodies_frame_id, false);
+      // Even when retrieving one sender's raw bodies, Fusion expresses coordinates
+      // in the requested Fusion reference frame.
+      auto msg = toRosMessage(
+        camera_bodies, publish_frame_id_, false, sender_tracking_enabled_);
       if (update_overlay_bodies) {
         std::lock_guard<std::mutex> lock(worker->bodies_mutex);
         worker->latest_bodies = msg;
