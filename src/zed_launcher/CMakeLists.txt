@@ -37,6 +37,7 @@ add_executable(zed_skeleton_overlay_node
 target_include_directories(zed_body_fusion_node PRIVATE
   ${ZED_INCLUDE_DIRS}
   ${CUDAToolkit_INCLUDE_DIRS}
+  ${OpenCV_INCLUDE_DIRS}
 )
 
 target_include_directories(zed_skeleton_overlay_node PRIVATE
@@ -52,6 +53,7 @@ target_link_directories(zed_body_fusion_node PRIVATE
 
 target_link_libraries(zed_body_fusion_node
   ${ZED_LIBRARIES}
+  ${OpenCV_LIBRARIES}
   CUDA::cudart
 )
 

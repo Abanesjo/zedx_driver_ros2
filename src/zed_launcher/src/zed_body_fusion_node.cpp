@@ -11,6 +11,7 @@
 #include <iterator>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -22,6 +23,7 @@
 #include <sensor_msgs/image_encodings.hpp>
 #include <sensor_msgs/msg/camera_info.hpp>
 #include <sensor_msgs/msg/image.hpp>
+#include <opencv2/imgproc.hpp>
 #include <zed_msgs/msg/objects_stamped.hpp>
 
 namespace
@@ -209,6 +211,52 @@ void copySkeleton3d(RosSkeleton & dest, const SlKeypoints & src)
   }
 }
 
+using Bone = std::pair<int, int>;
+
+template<typename PartT>
+std::vector<Bone> toIndexBones(const std::vector<std::pair<PartT, PartT>> & bones)
+{
+  std::vector<Bone> indexed;
+  indexed.reserve(bones.size());
+  for (const auto & bone : bones) {
+    indexed.emplace_back(sl::getIdx(bone.first), sl::getIdx(bone.second));
+  }
+  return indexed;
+}
+
+const std::vector<Bone> & bonesForFormat(int8_t body_format)
+{
+  static const auto body_18_bones = toIndexBones(sl::BODY_18_BONES);
+  static const auto body_34_bones = toIndexBones(sl::BODY_34_BONES);
+  static const auto body_38_bones = toIndexBones(sl::BODY_38_BONES);
+
+  if (body_format == 0) {
+    return body_18_bones;
+  }
+  if (body_format == 1) {
+    return body_34_bones;
+  }
+  return body_38_bones;
+}
+
+cv::Scalar colorForId(int id)
+{
+  static const std::vector<cv::Scalar> colors = {
+    cv::Scalar(232.0, 176.0, 59.0),
+    cv::Scalar(175.0, 208.0, 25.0),
+    cv::Scalar(102.0, 205.0, 105.0),
+    cv::Scalar(185.0, 0.0, 255.0),
+    cv::Scalar(99.0, 107.0, 252.0),
+    cv::Scalar(252.0, 225.0, 8.0),
+    cv::Scalar(167.0, 130.0, 141.0),
+    cv::Scalar(194.0, 72.0, 113.0)};
+
+  if (id < 0) {
+    return cv::Scalar(236.0, 184.0, 36.0);
+  }
+  return colors[static_cast<size_t>(id) % colors.size()];
+}
+
 }  // namespace
 
 class ZedBodyFusionNode final : public rclcpp::Node
@@ -267,13 +315,17 @@ private:
     sl::Mat image;
     sensor_msgs::msg::CameraInfo camera_info;
     rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr image_pub;
+    rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr overlay_image_pub;
     rclcpp::Publisher<sensor_msgs::msg::CameraInfo>::SharedPtr camera_info_pub;
     rclcpp::Publisher<zed_msgs::msg::ObjectsStamped>::SharedPtr bodies_pub;
+    zed_msgs::msg::ObjectsStamped latest_bodies;
+    std::mutex bodies_mutex;
     std::thread thread;
     std::atomic_bool running{false};
     std::string camera_name;
     std::string image_frame_id;
     std::string bodies_frame_id;
+    bool latest_bodies_valid = false;
     unsigned int serial_number = 0;
   };
 
@@ -314,7 +366,12 @@ private:
       declare_parameter<int>("single_body_switch_frames", 5);
 
     single_body_enabled_ = declare_parameter<bool>("single_body_enabled", true);
-    publish_images_ = declare_parameter<bool>("publish_images", true);
+    publish_images_ = declare_parameter<bool>("publish_images", false);
+    publish_overlay_images_ = declare_parameter<bool>("publish_overlay_images", true);
+    overlay_min_confidence_ =
+      declare_parameter<double>("overlay_min_confidence", confidence_threshold_);
+    overlay_max_skeleton_age_sec_ =
+      declare_parameter<double>("overlay_max_skeleton_age_sec", 0.5);
     sender_tracking_enabled_ = declare_parameter<bool>("sender_tracking_enabled", false);
     fusion_tracking_enabled_ = declare_parameter<bool>("fusion_tracking_enabled", true);
     body_fitting_enabled_ = declare_parameter<bool>("body_fitting_enabled", false);
@@ -332,12 +389,21 @@ private:
     if (confidence_threshold_ < 0.0 || confidence_threshold_ > 100.0) {
       throw std::runtime_error("confidence_threshold must be in the range [0, 100]");
     }
+    if (overlay_min_confidence_ < 0.0 || overlay_min_confidence_ > 100.0) {
+      throw std::runtime_error("overlay_min_confidence must be in the range [0, 100]");
+    }
+    if (overlay_max_skeleton_age_sec_ < 0.0) {
+      throw std::runtime_error("overlay_max_skeleton_age_sec must be non-negative");
+    }
     if (camera_fps_ <= 0) {
       throw std::runtime_error("camera_fps must be positive");
     }
-    if (publish_images_ && (left_camera_name_.empty() || right_camera_name_.empty())) {
+    if (
+      (publish_images_ || publish_overlay_images_) &&
+      (left_camera_name_.empty() || right_camera_name_.empty()))
+    {
       throw std::runtime_error(
-        "left_camera_name and right_camera_name must be non-empty when publish_images is true");
+        "left_camera_name and right_camera_name must be non-empty when image publishing is enabled");
     }
     if (single_body_switch_margin_ < 0.0) {
       throw std::runtime_error("single_body_switch_margin must be non-negative");
@@ -437,6 +503,11 @@ private:
     return "/" + camera_name + "/zed_node/rgb/color/rect/camera_info";
   }
 
+  std::string overlayImageTopicForCamera(const std::string & camera_name) const
+  {
+    return "/" + camera_name + "/zed_node/rgb/color/rect/skeleton_overlay";
+  }
+
   std::string bodiesTopicForCamera(const std::string & camera_name) const
   {
     return "/" + camera_name + "/zed_node/body_trk/skeletons";
@@ -501,6 +572,22 @@ private:
       worker.serial_number, worker.camera_info_pub->get_topic_name());
   }
 
+  void configureOverlayPublishing(CameraWorker & worker, size_t index)
+  {
+    if (!publish_overlay_images_) {
+      return;
+    }
+
+    worker.camera_name = cameraNameForConfig(worker.config, index);
+    worker.image_frame_id = imageFrameForCamera(worker.camera_name);
+    worker.overlay_image_pub = create_publisher<sensor_msgs::msg::Image>(
+      overlayImageTopicForCamera(worker.camera_name), rclcpp::SensorDataQoS());
+
+    RCLCPP_INFO(
+      get_logger(), "Publishing skeleton overlay images for serial %u on %s",
+      worker.serial_number, worker.overlay_image_pub->get_topic_name());
+  }
+
   void configurePerCameraBodyPublishing(CameraWorker & worker, size_t index)
   {
     worker.camera_name = cameraNameForConfig(worker.config, index);
@@ -522,6 +609,17 @@ private:
 
     return worker.image_pub->get_subscription_count() > 0 ||
            worker.camera_info_pub->get_subscription_count() > 0;
+  }
+
+  bool hasOverlayImageSubscribers(const CameraWorker & worker) const
+  {
+    return publish_overlay_images_ && worker.overlay_image_pub &&
+           worker.overlay_image_pub->get_subscription_count() > 0;
+  }
+
+  bool shouldRetrieveImage(const CameraWorker & worker) const
+  {
+    return hasImageSubscribers(worker) || hasOverlayImageSubscribers(worker);
   }
 
   builtin_interfaces::msg::Time timeFromNanoseconds(uint64_t timestamp_ns) const
@@ -548,7 +646,7 @@ private:
 
   void publishImage(CameraWorker & worker, rclcpp::Clock & steady_clock)
   {
-    if (!hasImageSubscribers(worker)) {
+    if (!shouldRetrieveImage(worker)) {
       return;
     }
 
@@ -600,8 +698,105 @@ private:
     camera_info_msg.width = image_msg.width;
     camera_info_msg.height = image_msg.height;
 
-    worker.image_pub->publish(std::move(image_msg));
-    worker.camera_info_pub->publish(camera_info_msg);
+    if (hasImageSubscribers(worker)) {
+      worker.image_pub->publish(image_msg);
+      worker.camera_info_pub->publish(camera_info_msg);
+    }
+
+    if (hasOverlayImageSubscribers(worker)) {
+      publishOverlayImage(worker, image_msg);
+    }
+  }
+
+  bool latestBodiesForOverlay(
+    CameraWorker & worker, zed_msgs::msg::ObjectsStamped & bodies) const
+  {
+    std::lock_guard<std::mutex> lock(worker.bodies_mutex);
+    if (!worker.latest_bodies_valid) {
+      return false;
+    }
+    bodies = worker.latest_bodies;
+    return true;
+  }
+
+  bool skeletonsAreFresh(const zed_msgs::msg::ObjectsStamped & skeletons) const
+  {
+    if (overlay_max_skeleton_age_sec_ == 0.0) {
+      return true;
+    }
+
+    const rclcpp::Time stamp(skeletons.header.stamp);
+    if (stamp.nanoseconds() == 0) {
+      return true;
+    }
+
+    const double age_sec = std::abs((now() - stamp).seconds());
+    return age_sec <= overlay_max_skeleton_age_sec_;
+  }
+
+  bool validOverlayPoint(
+    const zed_msgs::msg::Keypoint2Df & keypoint, const cv::Size & size) const
+  {
+    const float x = keypoint.kp[0];
+    const float y = keypoint.kp[1];
+    return std::isfinite(x) && std::isfinite(y) && x > 0.0f && y > 0.0f &&
+           x < static_cast<float>(size.width) && y < static_cast<float>(size.height);
+  }
+
+  cv::Point overlayPoint(const zed_msgs::msg::Keypoint2Df & keypoint) const
+  {
+    return cv::Point(
+      static_cast<int>(std::lround(keypoint.kp[0])),
+      static_cast<int>(std::lround(keypoint.kp[1])));
+  }
+
+  void drawOverlayObject(cv::Mat & image, const zed_msgs::msg::Object & object) const
+  {
+    if (!object.skeleton_available || object.confidence < overlay_min_confidence_) {
+      return;
+    }
+
+    const auto color = colorForId(object.label_id);
+    const auto & keypoints = object.skeleton_2d.keypoints;
+    const auto & bones = bonesForFormat(object.body_format);
+    const auto image_size = image.size();
+
+    for (const auto & bone : bones) {
+      if (bone.first < 0 || bone.second < 0 ||
+        static_cast<size_t>(bone.first) >= keypoints.size() ||
+        static_cast<size_t>(bone.second) >= keypoints.size())
+      {
+        continue;
+      }
+      const auto & first = keypoints[static_cast<size_t>(bone.first)];
+      const auto & second = keypoints[static_cast<size_t>(bone.second)];
+      if (!validOverlayPoint(first, image_size) || !validOverlayPoint(second, image_size)) {
+        continue;
+      }
+      cv::line(image, overlayPoint(first), overlayPoint(second), color, 2, cv::LINE_AA);
+    }
+
+    for (const auto & keypoint : keypoints) {
+      if (!validOverlayPoint(keypoint, image_size)) {
+        continue;
+      }
+      cv::circle(image, overlayPoint(keypoint), 4, color, -1, cv::LINE_AA);
+    }
+  }
+
+  void publishOverlayImage(CameraWorker & worker, sensor_msgs::msg::Image image_msg)
+  {
+    zed_msgs::msg::ObjectsStamped bodies;
+    if (latestBodiesForOverlay(worker, bodies) && skeletonsAreFresh(bodies)) {
+      cv::Mat image(
+        static_cast<int>(image_msg.height), static_cast<int>(image_msg.width), CV_8UC3,
+        image_msg.data.data(), image_msg.step);
+      for (const auto & object : bodies.objects) {
+        drawOverlayObject(image, object);
+      }
+    }
+
+    worker.overlay_image_pub->publish(std::move(image_msg));
   }
 
   void configureRuntimeParameters()
@@ -662,6 +857,7 @@ private:
 
       configurePerCameraBodyPublishing(*worker, idx);
       configureImagePublishing(*worker, idx);
+      configureOverlayPublishing(*worker, idx);
 
       sl::PositionalTrackingParameters tracking_params;
       tracking_params.set_as_static = set_as_static_;
@@ -1018,7 +1214,10 @@ private:
   void publishPerCameraBodies()
   {
     for (const auto & worker : workers_) {
-      if (!worker->bodies_pub || worker->bodies_pub->get_subscription_count() == 0) {
+      const bool publish_bodies =
+        worker->bodies_pub && worker->bodies_pub->get_subscription_count() > 0;
+      const bool update_overlay_bodies = hasOverlayImageSubscribers(*worker);
+      if (!publish_bodies && !update_overlay_bodies) {
         continue;
       }
 
@@ -1039,8 +1238,15 @@ private:
         continue;
       }
 
-      worker->bodies_pub->publish(
-        toRosMessage(camera_bodies, worker->bodies_frame_id, false));
+      auto msg = toRosMessage(camera_bodies, worker->bodies_frame_id, false);
+      if (update_overlay_bodies) {
+        std::lock_guard<std::mutex> lock(worker->bodies_mutex);
+        worker->latest_bodies = msg;
+        worker->latest_bodies_valid = true;
+      }
+      if (publish_bodies) {
+        worker->bodies_pub->publish(std::move(msg));
+      }
     }
   }
 
@@ -1092,6 +1298,8 @@ private:
   sl::BodyTrackingFusionRuntimeParameters fusion_runtime_params_;
 
   double confidence_threshold_ = 70.0;
+  double overlay_min_confidence_ = 70.0;
+  double overlay_max_skeleton_age_sec_ = 0.5;
   double single_body_switch_margin_ = 10.0;
   double fusion_skeleton_smoothing_ = 0.0;
   int fusion_minimum_allowed_cameras_ = -1;
@@ -1108,7 +1316,8 @@ private:
   int candidate_switch_count_ = 0;
   double fusion_publish_rate_hz_ = 60.0;
   bool single_body_enabled_ = true;
-  bool publish_images_ = true;
+  bool publish_images_ = false;
+  bool publish_overlay_images_ = true;
   bool sender_tracking_enabled_ = false;
   bool fusion_tracking_enabled_ = true;
   bool body_fitting_enabled_ = false;
