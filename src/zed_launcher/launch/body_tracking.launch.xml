@@ -1,31 +1,75 @@
 <launch>
-  <!-- Camera model must match the camera connected to the ZED Box Mini -->
-  <arg name="camera_model" default="$(env CAM_MODEL zedx)" />
-
-  <!-- ROS name for the RTX-side wrapper node -->
-  <arg name="camera_name" default="zed_rtx" />
-
-  <!-- IP address of the ZED Box Mini streaming server -->
-  <arg name="stream_address" default="$(env ZED_BOX_IP 192.168.123.200)" />
-
-  <!-- Must match the Box-side stream_server.port -->
-  <arg name="stream_port" default="30000" />
-
-  <!-- Body tracking options -->
-  <arg name="body_model" default="HUMAN_BODY_ACCURATE" />
+  <arg name="role" default="local" />
+  <arg
+    name="fusion_config_path"
+    default="$(find-pkg-share zed_launcher)/calibration/calibration.json"
+  />
+  <arg name="body_model" default="HUMAN_BODY_FAST" />
   <arg name="body_format" default="BODY_38" />
+  <arg name="confidence_threshold" default="40.0" />
+  <arg name="publish_frame_id" default="zed_fusion_map" />
+  <arg name="output_topic" default="body_trk/skeletons" />
+  <arg name="camera_resolution" default="HD720" />
+  <arg name="camera_fps" default="30" />
+  <arg name="depth_mode" default="NEURAL_LIGHT" />
+  <arg name="fusion_reference_frame" default="BASELINK" />
+  <arg name="fusion_publish_rate_hz" default="30.0" />
+  <arg name="fusion_skeleton_smoothing" default="0.0" />
+  <arg name="fusion_minimum_allowed_cameras" default="-1" />
+  <arg name="fusion_minimum_allowed_keypoints" default="-1" />
+  <arg name="sender_tracking_enabled" default="true" />
+  <arg name="fusion_tracking_enabled" default="true" />
+  <arg name="body_fitting_enabled" default="false" />
+  <arg name="set_as_static" default="true" />
+  <arg name="allow_reduced_precision_inference" default="false" />
+  <arg name="sdk_gpu_id" default="-1" />
+  <arg name="sdk_verbose" default="1" />
+  <arg name="rviz" default="false" />
+  <arg
+    name="rviz_config"
+    default="$(find-pkg-share zed_launcher)/rviz/body_fusion.rviz"
+  />
 
-  <include file="$(find-pkg-share zed_wrapper)/launch/zed_camera.launch.py">
-    <arg name="camera_model" value="$(var camera_model)" />
-    <arg name="camera_name" value="$(var camera_name)" />
-
-    <!-- These make this wrapper instance a streaming client -->
-    <arg name="stream_address" value="$(var stream_address)" />
-    <arg name="stream_port" value="$(var stream_port)" />
-
-    <arg
-      name="param_overrides"
-      value="depth.depth_mode:=NEURAL;depth.publish_depth_map:=false;depth.publish_point_cloud:=false;body_tracking.bt_enabled:=true;body_tracking.model:=$(var body_model);body_tracking.body_format:=$(var body_format);body_tracking.enable_tracking:=true;object_detection.od_enabled:=false"
+  <node
+    pkg="zed_launcher"
+    exec="zed_body_fusion_node"
+    namespace="zed_fusion"
+    name="zed_body_fusion_node"
+    output="screen"
+  >
+    <param name="role" value="$(var role)" />
+    <param name="fusion_config_path" value="$(var fusion_config_path)" />
+    <param name="body_model" value="$(var body_model)" />
+    <param name="body_format" value="$(var body_format)" />
+    <param name="confidence_threshold" value="$(var confidence_threshold)" />
+    <param name="publish_frame_id" value="$(var publish_frame_id)" />
+    <param name="output_topic" value="$(var output_topic)" />
+    <param name="camera_resolution" value="$(var camera_resolution)" />
+    <param name="camera_fps" value="$(var camera_fps)" />
+    <param name="depth_mode" value="$(var depth_mode)" />
+    <param name="fusion_reference_frame" value="$(var fusion_reference_frame)" />
+    <param name="fusion_publish_rate_hz" value="$(var fusion_publish_rate_hz)" />
+    <param name="fusion_skeleton_smoothing" value="$(var fusion_skeleton_smoothing)" />
+    <param name="fusion_minimum_allowed_cameras" value="$(var fusion_minimum_allowed_cameras)" />
+    <param name="fusion_minimum_allowed_keypoints" value="$(var fusion_minimum_allowed_keypoints)" />
+    <param name="sender_tracking_enabled" value="$(var sender_tracking_enabled)" />
+    <param name="fusion_tracking_enabled" value="$(var fusion_tracking_enabled)" />
+    <param name="body_fitting_enabled" value="$(var body_fitting_enabled)" />
+    <param name="set_as_static" value="$(var set_as_static)" />
+    <param
+      name="allow_reduced_precision_inference"
+      value="$(var allow_reduced_precision_inference)"
     />
-  </include>
+    <param name="sdk_gpu_id" value="$(var sdk_gpu_id)" />
+    <param name="sdk_verbose" value="$(var sdk_verbose)" />
+  </node>
+
+  <node
+    if="$(var rviz)"
+    pkg="rviz2"
+    exec="rviz2"
+    name="rviz2"
+    output="screen"
+    args="-d $(var rviz_config)"
+  />
 </launch>

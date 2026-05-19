@@ -9,8 +9,13 @@
 
   <buildtool_depend>ament_cmake</buildtool_depend>
 
+  <depend>rclcpp</depend>
+  <depend>zed_msgs</depend>
+
   <exec_depend>ros2launch</exec_depend>
   <exec_depend>zed_wrapper</exec_depend>
+  <exec_depend>rviz2</exec_depend>
+  <exec_depend>rviz_plugin_zed_od</exec_depend>
 
   <export>
     <build_type>ament_cmake</build_type>
