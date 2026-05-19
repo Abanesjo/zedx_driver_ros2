@@ -1,0 +1,54 @@
+human_mapping_node:
+  ros__parameters:
+    input_skeleton_topic: "/zed_fusion/body_trk/skeletons"
+    joint_command_topic: "/upper_body_targets_unsafe"
+    collider_topic: "/human/colliders"
+    fallback_frame_id: "fusion_world"
+
+    publish_rate_hz: 50.0
+    stale_timeout_sec: 0.5
+    min_confidence: 70.0
+    require_body_38: true
+
+    point_ema_alpha: 0.30
+    point_max_jump: 0.60
+    point_max_reject_count: 3
+    angle_ema_alpha: 0.25
+    angle_max_rate_deg: 100.0
+
+    enable_neutral_calibration: true
+    startup_delay_sec: 5.0
+    neutral_calibration_duration: 10.0
+
+    joint_names:
+      - waist_roll_joint
+      - waist_pitch_joint
+      - left_shoulder_pitch_joint
+      - left_shoulder_roll_joint
+      - left_elbow_joint
+      - right_shoulder_pitch_joint
+      - right_shoulder_roll_joint
+      - right_elbow_joint
+    q_home: [0.0, 0.0, 0.0, 0.0, 1.5708, 0.0, 0.0, 1.5708]
+    signs: [-1.0, 1.0, -1.0, 1.0, -1.0, -1.0, -1.0, -1.0]
+    gains: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+    bias: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    q_min: [-0.52, -0.52, -3.0892, -1.5882, -1.0472, -3.0892, -2.2515, -1.0472]
+    q_max: [0.52, 0.52, 2.6704, 2.2515, 2.0944, 2.6704, 1.5882, 2.0944]
+
+    human_radius_scale: 1.5
+    torso_radius: 0.10
+    shoulder_radius: 0.05
+    arm_radius: 0.05
+    thigh_radius: 0.065
+    shin_radius: 0.065
+    hand_extension_length: 0.16
+
+human_collider_viz_node:
+  ros__parameters:
+    input_collider_topic: "/human/colliders"
+    collider_markers_topic: "/human/collider_markers"
+    collider_marker_rate: 5.0
+    collision_geometry: "capsules"
+    sphere_interpolation_level: 0
+    sphere_radius_gain: 1.0

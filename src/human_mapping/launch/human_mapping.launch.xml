@@ -1,0 +1,31 @@
+<launch>
+  <arg name="input_skeleton_topic" default="/zed_fusion/body_trk/skeletons"/>
+  <arg name="joint_command_topic" default="/upper_body_targets_unsafe"/>
+  <arg name="collider_topic" default="/human/colliders"/>
+  <arg name="publish_collider_markers" default="true"/>
+  <arg name="collider_markers_topic" default="/human/collider_markers"/>
+  <arg name="collider_marker_rate" default="5.0"/>
+  <arg name="collision_geometry" default="capsules"/>
+  <arg name="sphere_interpolation_level" default="0"/>
+  <arg name="sphere_radius_gain" default="1.0"/>
+  <arg name="config" default="$(find-pkg-share human_mapping)/config/human_mapping.yaml"/>
+
+  <node pkg="human_mapping" exec="human_mapping_node" name="human_mapping_node" output="screen">
+    <param from="$(var config)"/>
+    <param name="input_skeleton_topic" value="$(var input_skeleton_topic)"/>
+    <param name="joint_command_topic" value="$(var joint_command_topic)"/>
+    <param name="collider_topic" value="$(var collider_topic)"/>
+  </node>
+
+  <group if="$(var publish_collider_markers)">
+    <node pkg="human_mapping" exec="human_collider_viz_node" name="human_collider_viz_node" output="screen">
+      <param from="$(var config)"/>
+      <param name="input_collider_topic" value="$(var collider_topic)"/>
+      <param name="collider_markers_topic" value="$(var collider_markers_topic)"/>
+      <param name="collider_marker_rate" value="$(var collider_marker_rate)"/>
+      <param name="collision_geometry" value="$(var collision_geometry)"/>
+      <param name="sphere_interpolation_level" value="$(var sphere_interpolation_level)"/>
+      <param name="sphere_radius_gain" value="$(var sphere_radius_gain)"/>
+    </node>
+  </group>
+</launch>
