@@ -6,8 +6,11 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 find_package(ament_cmake REQUIRED)
 find_package(OpenCV REQUIRED)
+find_package(geometry_msgs REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(sensor_msgs REQUIRED)
+find_package(tf2 REQUIRED)
+find_package(tf2_ros REQUIRED)
 find_package(zed_msgs REQUIRED)
 
 if(CMAKE_VERSION VERSION_GREATER_EQUAL "3.27")
@@ -62,8 +65,11 @@ target_link_libraries(zed_skeleton_overlay_node
 )
 
 ament_target_dependencies(zed_body_fusion_node
+  geometry_msgs
   rclcpp
   sensor_msgs
+  tf2
+  tf2_ros
   zed_msgs
 )
 

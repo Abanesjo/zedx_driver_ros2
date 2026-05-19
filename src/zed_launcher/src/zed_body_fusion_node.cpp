@@ -18,11 +18,13 @@
 #include <vector>
 
 #include <builtin_interfaces/msg/time.hpp>
+#include <geometry_msgs/msg/transform_stamped.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/distortion_models.hpp>
 #include <sensor_msgs/image_encodings.hpp>
 #include <sensor_msgs/msg/camera_info.hpp>
 #include <sensor_msgs/msg/image.hpp>
+#include <tf2_ros/static_transform_broadcaster.h>
 #include <opencv2/imgproc.hpp>
 #include <zed_msgs/msg/objects_stamped.hpp>
 
@@ -276,6 +278,7 @@ public:
 
     pub_bodies_ = create_publisher<zed_msgs::msg::ObjectsStamped>(
       output_topic_, rclcpp::SensorDataQoS());
+    static_tf_broadcaster_ = std::make_unique<tf2_ros::StaticTransformBroadcaster>(this);
 
     RCLCPP_INFO(get_logger(), "Loading ZED Fusion configuration: %s", fusion_config_path_.c_str());
     fusion_configs_ = sl::readFusionConfigurationFile(
@@ -287,6 +290,7 @@ public:
     }
 
     configureRuntimeParameters();
+    publishStaticCameraTransforms();
 
     try {
       startCameraPublishers();
@@ -516,6 +520,44 @@ private:
   std::string imageFrameForCamera(const std::string & camera_name) const
   {
     return camera_name + "_left_camera_optical_frame";
+  }
+
+  geometry_msgs::msg::TransformStamped staticCameraTransformForConfig(
+    const sl::FusionConfiguration & config, size_t index)
+  {
+    geometry_msgs::msg::TransformStamped transform;
+    transform.header.stamp = now();
+    transform.header.frame_id = publish_frame_id_;
+    transform.child_frame_id = imageFrameForCamera(cameraNameForConfig(config, index));
+
+    const auto translation = config.pose.getTranslation();
+    const auto orientation = config.pose.getOrientation();
+    transform.transform.translation.x = static_cast<double>(translation.x);
+    transform.transform.translation.y = static_cast<double>(translation.y);
+    transform.transform.translation.z = static_cast<double>(translation.z);
+    transform.transform.rotation.x = static_cast<double>(orientation.x);
+    transform.transform.rotation.y = static_cast<double>(orientation.y);
+    transform.transform.rotation.z = static_cast<double>(orientation.z);
+    transform.transform.rotation.w = static_cast<double>(orientation.w);
+
+    return transform;
+  }
+
+  void publishStaticCameraTransforms()
+  {
+    std::vector<geometry_msgs::msg::TransformStamped> transforms;
+    transforms.reserve(fusion_configs_.size());
+
+    for (size_t idx = 0; idx < fusion_configs_.size(); ++idx) {
+      auto transform = staticCameraTransformForConfig(fusion_configs_[idx], idx);
+      RCLCPP_INFO(
+        get_logger(), "Publishing static camera TF %s -> %s for serial %u",
+        transform.header.frame_id.c_str(), transform.child_frame_id.c_str(),
+        static_cast<unsigned int>(fusion_configs_[idx].serial_number));
+      transforms.push_back(std::move(transform));
+    }
+
+    static_tf_broadcaster_->sendTransform(transforms);
   }
 
   sensor_msgs::msg::CameraInfo makeCameraInfo(
@@ -1330,6 +1372,7 @@ private:
   sl::Fusion fusion_;
   rclcpp::Publisher<zed_msgs::msg::ObjectsStamped>::SharedPtr pub_bodies_;
   rclcpp::TimerBase::SharedPtr fusion_timer_;
+  std::unique_ptr<tf2_ros::StaticTransformBroadcaster> static_tf_broadcaster_;
   std::atomic_bool shutting_down_{false};
 };
 

@@ -39,10 +39,46 @@ Visualization Manager:
         Value: /zed_fusion/body_trk/skeletons
       Transparency: 0.25
       Value: true
+    - Class: rviz_plugin_zed_od/ZedOdDisplay
+      Enabled: true
+      Joint Radius: 0.05
+      Label Scale: 1.5
+      Link Size: 0.012
+      Name: Left Unfused Bodies
+      Show Bounding Boxes: false
+      Show Labels: false
+      Show Skeletons: true
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        Filter size: 10
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /zed_left/zed_node/body_trk/skeletons
+      Transparency: 0.45
+      Value: true
+    - Class: rviz_plugin_zed_od/ZedOdDisplay
+      Enabled: true
+      Joint Radius: 0.05
+      Label Scale: 1.5
+      Link Size: 0.012
+      Name: Right Unfused Bodies
+      Show Bounding Boxes: false
+      Show Labels: false
+      Show Skeletons: true
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        Filter size: 10
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /zed_right/zed_node/body_trk/skeletons
+      Transparency: 0.45
+      Value: true
   Enabled: true
   Global Options:
     Background Color: 48; 48; 48
-    Fixed Frame: zed_fusion_map
+    Fixed Frame: fusion_world
     Frame Rate: 30
   Name: root
   Tools:
