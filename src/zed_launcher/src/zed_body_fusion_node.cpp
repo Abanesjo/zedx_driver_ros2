@@ -11,7 +11,6 @@
 #include <iterator>
 #include <limits>
 #include <memory>
-#include <mutex>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -322,13 +321,11 @@ private:
     rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr overlay_image_pub;
     rclcpp::Publisher<sensor_msgs::msg::CameraInfo>::SharedPtr camera_info_pub;
     rclcpp::Publisher<zed_msgs::msg::ObjectsStamped>::SharedPtr bodies_pub;
-    zed_msgs::msg::ObjectsStamped latest_bodies;
-    std::mutex bodies_mutex;
+    sl::Bodies overlay_bodies;
     std::thread thread;
     std::atomic_bool running{false};
     std::string camera_name;
     std::string image_frame_id;
-    bool latest_bodies_valid = false;
     unsigned int serial_number = 0;
   };
 
@@ -747,57 +744,48 @@ private:
     }
   }
 
-  bool latestBodiesForOverlay(
-    CameraWorker & worker, zed_msgs::msg::ObjectsStamped & bodies) const
+  double overlayTimestampDeltaSec(
+    const sl::Bodies & bodies, const sensor_msgs::msg::Image & image_msg) const
   {
-    std::lock_guard<std::mutex> lock(worker.bodies_mutex);
-    if (!worker.latest_bodies_valid) {
-      return false;
+    const auto bodies_timestamp_ns = bodies.timestamp.getNanoseconds();
+    const rclcpp::Time image_stamp(image_msg.header.stamp);
+    if (
+      bodies_timestamp_ns == 0 ||
+      bodies_timestamp_ns > static_cast<uint64_t>(std::numeric_limits<int64_t>::max()) ||
+      image_stamp.nanoseconds() == 0)
+    {
+      return std::numeric_limits<double>::infinity();
     }
-    bodies = worker.latest_bodies;
-    return true;
+
+    const auto delta_ns =
+      image_stamp.nanoseconds() - static_cast<int64_t>(bodies_timestamp_ns);
+    return std::abs(static_cast<double>(delta_ns) / 1e9);
   }
 
-  bool skeletonsAreFresh(const zed_msgs::msg::ObjectsStamped & skeletons) const
+  bool validOverlayPoint(const sl::float2 & keypoint, const cv::Size & size) const
   {
-    if (overlay_max_skeleton_age_sec_ == 0.0) {
-      return true;
-    }
-
-    const rclcpp::Time stamp(skeletons.header.stamp);
-    if (stamp.nanoseconds() == 0) {
-      return true;
-    }
-
-    const double age_sec = std::abs((now() - stamp).seconds());
-    return age_sec <= overlay_max_skeleton_age_sec_;
-  }
-
-  bool validOverlayPoint(
-    const zed_msgs::msg::Keypoint2Df & keypoint, const cv::Size & size) const
-  {
-    const float x = keypoint.kp[0];
-    const float y = keypoint.kp[1];
+    const float x = keypoint[0];
+    const float y = keypoint[1];
     return std::isfinite(x) && std::isfinite(y) && x > 0.0f && y > 0.0f &&
            x < static_cast<float>(size.width) && y < static_cast<float>(size.height);
   }
 
-  cv::Point overlayPoint(const zed_msgs::msg::Keypoint2Df & keypoint) const
+  cv::Point overlayPoint(const sl::float2 & keypoint) const
   {
     return cv::Point(
-      static_cast<int>(std::lround(keypoint.kp[0])),
-      static_cast<int>(std::lround(keypoint.kp[1])));
+      static_cast<int>(std::lround(keypoint[0])),
+      static_cast<int>(std::lround(keypoint[1])));
   }
 
-  void drawOverlayObject(cv::Mat & image, const zed_msgs::msg::Object & object) const
+  void drawOverlayBody(cv::Mat & image, const sl::BodyData & body, int8_t body_format) const
   {
-    if (!object.skeleton_available || object.confidence < overlay_min_confidence_) {
+    if (body.confidence < overlay_min_confidence_) {
       return;
     }
 
-    const auto color = colorForId(object.label_id);
-    const auto & keypoints = object.skeleton_2d.keypoints;
-    const auto & bones = bonesForFormat(object.body_format);
+    const auto color = colorForId(body.id);
+    const auto & keypoints = body.keypoint_2d;
+    const auto & bones = bonesForFormat(body_format);
     const auto image_size = image.size();
 
     for (const auto & bone : bones) {
@@ -825,13 +813,39 @@ private:
 
   void publishOverlayImage(CameraWorker & worker, sensor_msgs::msg::Image image_msg)
   {
-    zed_msgs::msg::ObjectsStamped bodies;
-    if (latestBodiesForOverlay(worker, bodies) && skeletonsAreFresh(bodies)) {
-      cv::Mat image(
-        static_cast<int>(image_msg.height), static_cast<int>(image_msg.width), CV_8UC3,
-        image_msg.data.data(), image_msg.step);
-      for (const auto & object : bodies.objects) {
-        drawOverlayObject(image, object);
+    const auto bodies_err = worker.camera.retrieveBodies(worker.overlay_bodies);
+    if (bodies_err != sl::ERROR_CODE::SUCCESS) {
+      RCLCPP_WARN_THROTTLE(
+        get_logger(), *get_clock(), 2000,
+        "Camera serial %u body retrieval for overlay failed: %s",
+        worker.serial_number, zedErrorToString(bodies_err).c_str());
+    } else if (worker.overlay_bodies.is_new) {
+      const double timestamp_delta =
+        overlayTimestampDeltaSec(worker.overlay_bodies, image_msg);
+      const bool timestamp_ok =
+        overlay_max_skeleton_age_sec_ == 0.0 ||
+        (std::isfinite(timestamp_delta) && timestamp_delta <= overlay_max_skeleton_age_sec_);
+      if (!timestamp_ok) {
+        if (std::isfinite(timestamp_delta)) {
+          RCLCPP_WARN_THROTTLE(
+            get_logger(), *get_clock(), 2000,
+            "Skipping skeleton overlay for camera serial %u: image/body timestamp delta %.3fs "
+            "exceeds %.3fs",
+            worker.serial_number, timestamp_delta, overlay_max_skeleton_age_sec_);
+        } else {
+          RCLCPP_WARN_THROTTLE(
+            get_logger(), *get_clock(), 2000,
+            "Skipping skeleton overlay for camera serial %u: invalid image/body timestamp",
+            worker.serial_number);
+        }
+      } else {
+        const auto body_format = static_cast<int8_t>(worker.overlay_bodies.body_format);
+        cv::Mat image(
+          static_cast<int>(image_msg.height), static_cast<int>(image_msg.width), CV_8UC3,
+          image_msg.data.data(), image_msg.step);
+        for (const auto & body : worker.overlay_bodies.body_list) {
+          drawOverlayBody(image, body, body_format);
+        }
       }
     }
 
@@ -1259,8 +1273,7 @@ private:
     for (const auto & worker : workers_) {
       const bool publish_bodies =
         worker->bodies_pub && worker->bodies_pub->get_subscription_count() > 0;
-      const bool update_overlay_bodies = hasOverlayImageSubscribers(*worker);
-      if (!publish_bodies && !update_overlay_bodies) {
+      if (!publish_bodies) {
         continue;
       }
 
@@ -1285,14 +1298,7 @@ private:
       // in the requested Fusion reference frame.
       auto msg = toRosMessage(
         camera_bodies, publish_frame_id_, false, sender_tracking_enabled_);
-      if (update_overlay_bodies) {
-        std::lock_guard<std::mutex> lock(worker->bodies_mutex);
-        worker->latest_bodies = msg;
-        worker->latest_bodies_valid = true;
-      }
-      if (publish_bodies) {
-        worker->bodies_pub->publish(std::move(msg));
-      }
+      worker->bodies_pub->publish(std::move(msg));
     }
   }
 
