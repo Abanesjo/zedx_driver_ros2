@@ -1,10 +1,18 @@
 Panels:
   - Class: rviz_common/Displays
+    Help Height: 70
     Name: Displays
+    Property Tree Widget:
+      Expanded: ~
+      Splitter Ratio: 0.5
+    Tree Height: 517
   - Class: rviz_common/Selection
     Name: Selection
   - Class: rviz_common/Views
+    Expanded:
+      - /Current View1
     Name: Views
+    Splitter Ratio: 0.5
 Visualization Manager:
   Class: ""
   Displays:
@@ -14,18 +22,23 @@ Visualization Manager:
       Color: 160; 160; 164
       Enabled: true
       Line Style:
-        Line Width: 0.03
+        Line Width: 0.029999999329447746
         Value: Lines
       Name: Grid
+      Normal Cell Count: 0
+      Offset:
+        X: 0
+        Y: 0
+        Z: 0
       Plane: XY
       Plane Cell Count: 20
       Reference Frame: <Fixed Frame>
       Value: true
     - Class: rviz_plugin_zed_od/ZedOdDisplay
       Enabled: true
-      Joint Radius: 0.1
+      Joint Radius: 0.10000000149011612
       Label Scale: 2
-      Link Size: 0.025
+      Link Size: 0.02500000037252903
       Name: Fused Bodies
       Show Bounding Boxes: false
       Show Labels: true
@@ -41,9 +54,9 @@ Visualization Manager:
       Value: true
     - Class: rviz_plugin_zed_od/ZedOdDisplay
       Enabled: true
-      Joint Radius: 0.05
+      Joint Radius: 0.05000000074505806
       Label Scale: 1.5
-      Link Size: 0.012
+      Link Size: 0.012000000104308128
       Name: Left Unfused Bodies
       Show Bounding Boxes: false
       Show Labels: false
@@ -55,13 +68,13 @@ Visualization Manager:
         History Policy: Keep Last
         Reliability Policy: Best Effort
         Value: /zed_left/zed_node/body_trk/skeletons
-      Transparency: 0.45
+      Transparency: 0.44999998807907104
       Value: true
     - Class: rviz_plugin_zed_od/ZedOdDisplay
       Enabled: true
-      Joint Radius: 0.05
+      Joint Radius: 0.05000000074505806
       Label Scale: 1.5
-      Link Size: 0.012
+      Link Size: 0.012000000104308128
       Name: Right Unfused Bodies
       Show Bounding Boxes: false
       Show Labels: false
@@ -73,7 +86,19 @@ Visualization Manager:
         History Policy: Keep Last
         Reliability Policy: Best Effort
         Value: /zed_right/zed_node/body_trk/skeletons
-      Transparency: 0.45
+      Transparency: 0.44999998807907104
+      Value: true
+    - Class: rviz_default_plugins/MarkerArray
+      Enabled: true
+      Name: MarkerArray
+      Namespaces:
+        {}
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /human/collider_markers
       Value: true
   Enabled: true
   Global Options:
@@ -87,7 +112,11 @@ Visualization Manager:
     - Class: rviz_default_plugins/MoveCamera
     - Class: rviz_default_plugins/Select
     - Class: rviz_default_plugins/Measure
+      Line color: 128; 128; 0
     - Class: rviz_default_plugins/SetInitialPose
+      Covariance x: 0.25
+      Covariance y: 0.25
+      Covariance yaw: 0.06853891909122467
       Topic:
         Depth: 5
         Durability Policy: Volatile
@@ -109,13 +138,16 @@ Visualization Manager:
         History Policy: Keep Last
         Reliability Policy: Reliable
         Value: /clicked_point
+  Transformation:
+    Current:
+      Class: rviz_default_plugins/TF
   Value: true
   Views:
     Current:
       Class: rviz_default_plugins/Orbit
       Distance: 6
       Enable Stereo Rendering:
-        Stereo Eye Separation: 0.06
+        Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
         Swap Stereo Eyes: false
         Value: false
@@ -123,15 +155,27 @@ Visualization Manager:
         X: 0
         Y: 0
         Z: 1
+      Focal Shape Fixed Size: true
+      Focal Shape Size: 0.05000000074505806
+      Invert Z Axis: false
       Name: Current View
-      Near Clip Distance: 0.01
-      Pitch: 0.6
+      Near Clip Distance: 0.009999999776482582
+      Pitch: 0.6000000238418579
       Target Frame: <Fixed Frame>
       Value: Orbit (rviz)
-      Yaw: 0.8
+      Yaw: 0.800000011920929
     Saved: ~
 Window Geometry:
-  Height: 900
-  Width: 1200
+  Displays:
+    collapsed: false
+  Height: 1473
+  Hide Left Dock: false
+  Hide Right Dock: false
+  QMainWindow State: 000000ff00000000fd00000001000000000000019b0000056bfc0200000003fb000000100044006900730070006c006100790073010000003b00000286000000c700fffffffb0000001200530065006c0065006300740069006f006e01000002c70000013a0000005c00fffffffb0000000a0056006900650077007301000004070000019f000000a000ffffff000003120000056b00000004000000040000000800000008fc0000000100000002000000010000000a0054006f006f006c00730100000000ffffffff0000000000000000
+  Selection:
+    collapsed: false
+  Views:
+    collapsed: false
+  Width: 1203
   X: 80
   Y: 80
