@@ -13,6 +13,9 @@
   <arg name="body_model" default="HUMAN_BODY_FAST" />
   <arg name="body_format" default="BODY_38" />
   <arg name="confidence_threshold" default="40.0" />
+  <arg name="single_body_enabled" default="true" />
+  <arg name="single_body_switch_margin" default="10.0" />
+  <arg name="single_body_switch_frames" default="5" />
   <arg name="publish_frame_id" default="zed_fusion_map" />
   <arg name="output_topic" default="body_trk/skeletons" />
   <arg name="camera_resolution" default="HD720" />
@@ -54,6 +57,9 @@
     <param name="body_model" value="$(var body_model)" />
     <param name="body_format" value="$(var body_format)" />
     <param name="confidence_threshold" value="$(var confidence_threshold)" />
+    <param name="single_body_enabled" value="$(var single_body_enabled)" />
+    <param name="single_body_switch_margin" value="$(var single_body_switch_margin)" />
+    <param name="single_body_switch_frames" value="$(var single_body_switch_frames)" />
     <param name="publish_frame_id" value="$(var publish_frame_id)" />
     <param name="output_topic" value="$(var output_topic)" />
     <param name="camera_resolution" value="$(var camera_resolution)" />

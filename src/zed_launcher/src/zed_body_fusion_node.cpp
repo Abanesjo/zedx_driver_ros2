@@ -277,6 +277,8 @@ private:
       declare_parameter<std::string>("fusion_reference_frame", "BASELINK"));
 
     confidence_threshold_ = declare_parameter<double>("confidence_threshold", 40.0);
+    single_body_switch_margin_ =
+      declare_parameter<double>("single_body_switch_margin", 10.0);
     fusion_skeleton_smoothing_ = declare_parameter<double>("fusion_skeleton_smoothing", 0.0);
     fusion_minimum_allowed_cameras_ =
       declare_parameter<int>("fusion_minimum_allowed_cameras", -1);
@@ -289,7 +291,10 @@ private:
     right_serial_ = declare_parameter<int>("right_serial", 49967328);
     sdk_gpu_id_ = declare_parameter<int>("sdk_gpu_id", -1);
     fusion_publish_rate_hz_ = declare_parameter<double>("fusion_publish_rate_hz", 30.0);
+    single_body_switch_frames_ =
+      declare_parameter<int>("single_body_switch_frames", 5);
 
+    single_body_enabled_ = declare_parameter<bool>("single_body_enabled", true);
     sender_tracking_enabled_ = declare_parameter<bool>("sender_tracking_enabled", false);
     fusion_tracking_enabled_ = declare_parameter<bool>("fusion_tracking_enabled", true);
     body_fitting_enabled_ = declare_parameter<bool>("body_fitting_enabled", false);
@@ -306,6 +311,12 @@ private:
     }
     if (camera_fps_ <= 0) {
       throw std::runtime_error("camera_fps must be positive");
+    }
+    if (single_body_switch_margin_ < 0.0) {
+      throw std::runtime_error("single_body_switch_margin must be non-negative");
+    }
+    if (single_body_switch_frames_ <= 0) {
+      throw std::runtime_error("single_body_switch_frames must be positive");
     }
     if (left_stream_port_ <= 0 || left_stream_port_ > 65535) {
       throw std::runtime_error("left_stream_port must be in the range [1, 65535]");
@@ -566,49 +577,155 @@ private:
     pub_bodies_->publish(toRosMessage(bodies));
   }
 
+  int bestConfidenceIndex(const std::vector<sl::BodyData> & bodies) const
+  {
+    if (bodies.empty()) {
+      return -1;
+    }
+
+    return static_cast<int>(
+      std::distance(
+        bodies.begin(),
+        std::max_element(
+          bodies.begin(), bodies.end(),
+          [](const sl::BodyData & lhs, const sl::BodyData & rhs) {
+            return lhs.confidence < rhs.confidence;
+          })));
+  }
+
+  int bodyIndexById(const std::vector<sl::BodyData> & bodies, int body_id) const
+  {
+    if (body_id < 0) {
+      return -1;
+    }
+
+    const auto it = std::find_if(
+      bodies.begin(), bodies.end(),
+      [body_id](const sl::BodyData & body) {
+        return body.id == body_id;
+      });
+
+    if (it == bodies.end()) {
+      return -1;
+    }
+
+    return static_cast<int>(std::distance(bodies.begin(), it));
+  }
+
+  int selectedBodyIndex(const std::vector<sl::BodyData> & bodies)
+  {
+    const int best_index = bestConfidenceIndex(bodies);
+    if (best_index < 0) {
+      selected_body_id_ = -1;
+      candidate_body_id_ = -1;
+      candidate_switch_count_ = 0;
+      return -1;
+    }
+
+    const auto & best_body = bodies[static_cast<size_t>(best_index)];
+    if (best_body.id < 0) {
+      selected_body_id_ = -1;
+      candidate_body_id_ = -1;
+      candidate_switch_count_ = 0;
+      return best_index;
+    }
+
+    const int current_index = bodyIndexById(bodies, selected_body_id_);
+    if (current_index < 0) {
+      selected_body_id_ = best_body.id;
+      candidate_body_id_ = -1;
+      candidate_switch_count_ = 0;
+      return best_index;
+    }
+
+    if (best_body.id == selected_body_id_) {
+      candidate_body_id_ = -1;
+      candidate_switch_count_ = 0;
+      return current_index;
+    }
+
+    const auto & current_body = bodies[static_cast<size_t>(current_index)];
+    const bool best_is_clearly_better =
+      best_body.confidence >=
+      current_body.confidence + static_cast<float>(single_body_switch_margin_);
+    if (!best_is_clearly_better) {
+      candidate_body_id_ = -1;
+      candidate_switch_count_ = 0;
+      return current_index;
+    }
+
+    if (candidate_body_id_ == best_body.id) {
+      ++candidate_switch_count_;
+    } else {
+      candidate_body_id_ = best_body.id;
+      candidate_switch_count_ = 1;
+    }
+
+    if (candidate_switch_count_ >= single_body_switch_frames_) {
+      selected_body_id_ = best_body.id;
+      candidate_body_id_ = -1;
+      candidate_switch_count_ = 0;
+      return best_index;
+    }
+
+    return current_index;
+  }
+
+  void copyBodyToRosObject(const sl::BodyData & body, zed_msgs::msg::Object & object)
+  {
+    object.label = "Body_" + std::to_string(body.id);
+    object.sublabel = "";
+    object.label_id = body.id;
+    object.confidence = body.confidence;
+    copyVector3(object.position, body.position);
+    copyFlat(object.position_covariance, body.position_covariance);
+    copyVector3(object.velocity, body.velocity);
+    object.tracking_available = fusion_tracking_enabled_;
+    object.tracking_state = static_cast<int8_t>(body.tracking_state);
+    object.action_state = static_cast<int8_t>(body.action_state);
+
+    if (body.bounding_box_2d.size() == 4) {
+      copyBox2d(object.bounding_box_2d, body.bounding_box_2d);
+    }
+    if (body.bounding_box.size() == 8) {
+      copyBox3d(object.bounding_box_3d, body.bounding_box);
+    }
+    copyVector3(object.dimensions_3d, body.dimensions);
+
+    object.body_format = static_cast<uint8_t>(body_format_);
+
+    if (body.head_bounding_box_2d.size() == 4) {
+      copyBox2d(object.head_bounding_box_2d, body.head_bounding_box_2d);
+    }
+    if (body.head_bounding_box.size() == 8) {
+      copyBox3d(object.head_bounding_box_3d, body.head_bounding_box);
+    }
+    copyVector3(object.head_position, body.head_position);
+
+    object.skeleton_available = true;
+    copySkeleton2d(object.skeleton_2d, body.keypoint_2d);
+    copySkeleton3d(object.skeleton_3d, body.keypoint);
+  }
+
   zed_msgs::msg::ObjectsStamped toRosMessage(const sl::Bodies & bodies)
   {
     zed_msgs::msg::ObjectsStamped msg;
     msg.header.stamp = now();
     msg.header.frame_id = publish_frame_id_;
+
+    if (single_body_enabled_) {
+      const int selected_index = selectedBodyIndex(bodies.body_list);
+      if (selected_index >= 0) {
+        msg.objects.resize(1);
+        copyBodyToRosObject(
+          bodies.body_list[static_cast<size_t>(selected_index)], msg.objects[0]);
+      }
+      return msg;
+    }
+
     msg.objects.resize(bodies.body_list.size());
-
     for (size_t idx = 0; idx < bodies.body_list.size(); ++idx) {
-      const auto & body = bodies.body_list[idx];
-      auto & object = msg.objects[idx];
-
-      object.label = "Body_" + std::to_string(body.id);
-      object.sublabel = "";
-      object.label_id = body.id;
-      object.confidence = body.confidence;
-      copyVector3(object.position, body.position);
-      copyFlat(object.position_covariance, body.position_covariance);
-      copyVector3(object.velocity, body.velocity);
-      object.tracking_available = fusion_tracking_enabled_;
-      object.tracking_state = static_cast<int8_t>(body.tracking_state);
-      object.action_state = static_cast<int8_t>(body.action_state);
-
-      if (body.bounding_box_2d.size() == 4) {
-        copyBox2d(object.bounding_box_2d, body.bounding_box_2d);
-      }
-      if (body.bounding_box.size() == 8) {
-        copyBox3d(object.bounding_box_3d, body.bounding_box);
-      }
-      copyVector3(object.dimensions_3d, body.dimensions);
-
-      object.body_format = static_cast<uint8_t>(body_format_);
-
-      if (body.head_bounding_box_2d.size() == 4) {
-        copyBox2d(object.head_bounding_box_2d, body.head_bounding_box_2d);
-      }
-      if (body.head_bounding_box.size() == 8) {
-        copyBox3d(object.head_bounding_box_3d, body.head_bounding_box);
-      }
-      copyVector3(object.head_position, body.head_position);
-
-      object.skeleton_available = true;
-      copySkeleton2d(object.skeleton_2d, body.keypoint_2d);
-      copySkeleton3d(object.skeleton_3d, body.keypoint);
+      copyBodyToRosObject(bodies.body_list[idx], msg.objects[idx]);
     }
 
     return msg;
@@ -660,6 +777,7 @@ private:
   sl::BodyTrackingFusionRuntimeParameters fusion_runtime_params_;
 
   double confidence_threshold_ = 40.0;
+  double single_body_switch_margin_ = 10.0;
   double fusion_skeleton_smoothing_ = 0.0;
   int fusion_minimum_allowed_cameras_ = -1;
   int fusion_minimum_allowed_keypoints_ = -1;
@@ -669,7 +787,12 @@ private:
   int left_serial_ = 41235597;
   int right_serial_ = 49967328;
   int sdk_gpu_id_ = -1;
+  int single_body_switch_frames_ = 5;
+  int selected_body_id_ = -1;
+  int candidate_body_id_ = -1;
+  int candidate_switch_count_ = 0;
   double fusion_publish_rate_hz_ = 30.0;
+  bool single_body_enabled_ = true;
   bool sender_tracking_enabled_ = false;
   bool fusion_tracking_enabled_ = true;
   bool body_fitting_enabled_ = false;
