@@ -368,6 +368,8 @@ private:
     single_body_enabled_ = declare_parameter<bool>("single_body_enabled", true);
     publish_images_ = declare_parameter<bool>("publish_images", false);
     publish_overlay_images_ = declare_parameter<bool>("publish_overlay_images", true);
+    publish_per_camera_skeletons_ =
+      declare_parameter<bool>("publish_per_camera_skeletons", false);
     overlay_min_confidence_ =
       declare_parameter<double>("overlay_min_confidence", confidence_threshold_);
     overlay_max_skeleton_age_sec_ =
@@ -627,6 +629,10 @@ private:
 
   void configurePerCameraBodyPublishing(CameraWorker & worker, size_t index)
   {
+    if (!publish_per_camera_skeletons_) {
+      return;
+    }
+
     worker.camera_name = cameraNameForConfig(worker.config, index);
     worker.image_frame_id = imageFrameForCamera(worker.camera_name);
     worker.bodies_pub = create_publisher<zed_msgs::msg::ObjectsStamped>(
@@ -1053,7 +1059,9 @@ private:
     }
 
     pub_bodies_->publish(toRosMessage(bodies));
-    publishPerCameraBodies();
+    if (publish_per_camera_skeletons_) {
+      publishPerCameraBodies();
+    }
   }
 
   bool bodyPassesConfidence(const sl::BodyData & body) const
@@ -1370,6 +1378,7 @@ private:
   bool single_body_enabled_ = true;
   bool publish_images_ = false;
   bool publish_overlay_images_ = true;
+  bool publish_per_camera_skeletons_ = false;
   bool sender_tracking_enabled_ = false;
   bool fusion_tracking_enabled_ = true;
   bool body_fitting_enabled_ = false;
