@@ -3,9 +3,14 @@ Panels:
     Help Height: 70
     Name: Displays
     Property Tree Widget:
-      Expanded: ~
+      Expanded:
+        - /Image1
+        - /Image1/Topic1
+        - /Image2
+        - /Image2/Topic1
+        - /Camera 1 Axis1/Status1
       Splitter Ratio: 0.5
-    Tree Height: 517
+    Tree Height: 822
   - Class: rviz_common/Selection
     Name: Selection
   - Class: rviz_common/Views
@@ -100,6 +105,55 @@ Visualization Manager:
         Reliability Policy: Reliable
         Value: /human/collider_markers
       Value: true
+    - Class: rviz_default_plugins/Image
+      Enabled: true
+      Max Value: 1
+      Median window: 5
+      Min Value: 0
+      Name: Image
+      Normalize Range: true
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+        Value: /zed_left/zed_node/rgb/color/rect/skeleton_overlay
+      Value: true
+    - Class: rviz_default_plugins/Image
+      Enabled: true
+      Max Value: 1
+      Median window: 5
+      Min Value: 0
+      Name: Image
+      Normalize Range: true
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+        Value: /zed_right/zed_node/rgb/color/rect/skeleton_overlay
+      Value: true
+    - Class: rviz_default_plugins/Axes
+      Enabled: true
+      Length: 1
+      Name: Camera 1 Axis
+      Radius: 0.10000000149011612
+      Reference Frame: zed_left_left_camera_optical_frame
+      Value: true
+    - Class: rviz_default_plugins/Axes
+      Enabled: true
+      Length: 1
+      Name: Camera 2 Axis
+      Radius: 0.10000000149011612
+      Reference Frame: zed_right_left_camera_optical_frame
+      Value: true
+    - Class: rviz_default_plugins/Axes
+      Enabled: true
+      Length: 1
+      Name: Camera Fused Axis
+      Radius: 0.10000000149011612
+      Reference Frame: fusion_world
+      Value: true
   Enabled: true
   Global Options:
     Background Color: 48; 48; 48
@@ -145,37 +199,39 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz_default_plugins/Orbit
-      Distance: 6
+      Distance: 29.84670066833496
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
         Swap Stereo Eyes: false
         Value: false
       Focal Point:
-        X: 0
-        Y: 0
-        Z: 1
+        X: 0.07224082201719284
+        Y: 0.10255176573991776
+        Z: 0.07540231943130493
       Focal Shape Fixed Size: true
       Focal Shape Size: 0.05000000074505806
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 0.6000000238418579
+      Pitch: 0.6899999380111694
       Target Frame: <Fixed Frame>
       Value: Orbit (rviz)
-      Yaw: 0.800000011920929
+      Yaw: 0.35500195622444153
     Saved: ~
 Window Geometry:
   Displays:
     collapsed: false
-  Height: 1473
+  Height: 1834
   Hide Left Dock: false
   Hide Right Dock: false
-  QMainWindow State: 000000ff00000000fd00000001000000000000019b0000056bfc0200000003fb000000100044006900730070006c006100790073010000003b00000286000000c700fffffffb0000001200530065006c0065006300740069006f006e01000002c70000013a0000005c00fffffffb0000000a0056006900650077007301000004070000019f000000a000ffffff000003120000056b00000004000000040000000800000008fc0000000100000002000000010000000a0054006f006f006c00730100000000ffffffff0000000000000000
+  Image:
+    collapsed: false
+  QMainWindow State: 000000ff00000000fd00000002000000000000027a000006d4fc0200000003fb000000100044006900730070006c006100790073010000003b000003b7000000c700fffffffb0000001200530065006c0065006300740069006f006e01000003f8000001d40000005c00fffffffb0000000a0056006900650077007301000005d20000013d000000a000ffffff00000001000002a7000006d4fc0200000002fb0000000a0049006d006100670065010000003b000002d00000002800fffffffb0000000a0049006d0061006700650100000311000003fe0000002800ffffff000005d9000006d400000004000000040000000800000008fc0000000100000002000000010000000a0054006f006f006c00730100000000ffffffff0000000000000000
   Selection:
     collapsed: false
   Views:
     collapsed: false
-  Width: 1203
+  Width: 2822
   X: 80
   Y: 80
