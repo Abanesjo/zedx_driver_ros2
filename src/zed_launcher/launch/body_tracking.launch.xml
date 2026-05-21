@@ -21,7 +21,7 @@
   <!-- Options: BODY_18, BODY_34, BODY_38 -->
   <arg name="body_format" default="BODY_38" />
   <!-- confidence threshold for body tracking -->
-  <arg name="confidence_threshold" default="50.0" />
+  <arg name="confidence_threshold" default="30.0" />
   <!-- to publish only one skeleton -->
   <arg name="single_body_enabled" default="true" />
   <!-- when switching from one skeleton to another, the confidence difference must be greater than the margin -->
