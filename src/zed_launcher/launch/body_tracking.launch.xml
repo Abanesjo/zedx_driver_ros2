@@ -1,5 +1,5 @@
 <launch>
-  <arg name="debug" default="true" />
+  <arg name="debug" default="false" />
   <arg name="camera_fps" default="60" />
   <arg name="fusion_publish_rate_hz" default="60.0" />
 
@@ -17,7 +17,7 @@
     default="$(find-pkg-share zed_launcher)/calibration/calibration.json"
   />
   <!-- Options: HUMAN_BODY_FAST, HUMAN_BODY_MEDIUM, HUMAN_BODY_ACCURATE -->
-  <arg name="body_model" default="HUMAN_BODY_ACCURATE" />
+  <arg name="body_model" default="HUMAN_BODY_FAST" />
   <!-- Options: BODY_18, BODY_34, BODY_38 -->
   <arg name="body_format" default="BODY_38" />
   <!-- confidence threshold for body tracking -->
@@ -30,21 +30,21 @@
   <arg name="single_body_switch_frames" default="60" />
   <arg name="publish_frame_id" default="fusion_world" />
   <arg name="output_topic" default="body_trk/skeletons" />
-  <arg name="camera_resolution" default="HD1080" />
+  <arg name="camera_resolution" default="SVGA" />
   <arg name="publish_images" default="false" />
   <arg name="publish_overlay_images" default="$(var debug)" />
   <arg name="publish_per_camera_skeletons" default="$(var debug)" />
   <arg name="overlay_min_confidence" default="$(var confidence_threshold)" />
   <arg name="overlay_max_skeleton_age_sec" default="0.5" />
   <!-- Options: PERFORMANCE, QUALITY, ULTRA, NEURAL_LIGHT, NEURAL, NEURAL_PLUS -->
-  <arg name="depth_mode" default="NEURAL_PLUS" />
+  <arg name="depth_mode" default="NEURAL_LIGHT" />
   <arg name="fusion_reference_frame" default="BASELINK" />
   <arg name="fusion_skeleton_smoothing" default="0.0" />
   <arg name="fusion_minimum_allowed_cameras" default="-1" />
-  <arg name="fusion_minimum_allowed_keypoints" default="14" />
-  <arg name="sender_tracking_enabled" default="false" />
-  <arg name="fusion_tracking_enabled" default="true" />
-  <arg name="body_fitting_enabled" default="true" />
+  <arg name="fusion_minimum_allowed_keypoints" default="7" />
+  <arg name="sender_tracking_enabled" default="false"/>
+  <arg name="fusion_tracking_enabled" default="false"/>
+  <arg name="body_fitting_enabled" default="false" />
   <arg name="set_as_static" default="true" />
   <arg name="allow_reduced_precision_inference" default="false" />
   <arg name="sdk_gpu_id" default="-1" />
