@@ -27,7 +27,7 @@
   <!-- when switching from one skeleton to another, the confidence difference must be greater than the margin -->
   <arg name="single_body_switch_margin" default="10.0" />
   <!-- confidence must be greater for X frames -->
-  <arg name="single_body_switch_frames" default="5" />
+  <arg name="single_body_switch_frames" default="60" />
   <arg name="publish_frame_id" default="fusion_world" />
   <arg name="output_topic" default="body_trk/skeletons" />
   <arg name="camera_resolution" default="HD1080" />
@@ -40,11 +40,11 @@
   <arg name="depth_mode" default="NEURAL_LIGHT" />
   <arg name="fusion_reference_frame" default="BASELINK" />
   <arg name="fusion_skeleton_smoothing" default="0.0" />
-  <arg name="fusion_minimum_allowed_cameras" default="-1" />
-  <arg name="fusion_minimum_allowed_keypoints" default="7" />
+  <arg name="fusion_minimum_allowed_cameras" default="2" />
+  <arg name="fusion_minimum_allowed_keypoints" default="14" />
   <arg name="sender_tracking_enabled" default="false" />
   <arg name="fusion_tracking_enabled" default="true" />
-  <arg name="body_fitting_enabled" default="false" />
+  <arg name="body_fitting_enabled" default="true" />
   <arg name="set_as_static" default="true" />
   <arg name="allow_reduced_precision_inference" default="false" />
   <arg name="sdk_gpu_id" default="-1" />
