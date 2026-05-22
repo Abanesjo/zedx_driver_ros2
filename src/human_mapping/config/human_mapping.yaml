@@ -5,9 +5,9 @@ human_mapping_node:
     collider_topic: "/human/colliders"
     fallback_frame_id: "fusion_world"
 
-    publish_rate_hz: 50.0
-    stale_timeout_sec: 0.5
-    min_confidence: 70.0
+    publish_rate_hz: 60.0
+    stale_timeout_sec: 1.0
+    min_confidence: 30.0
     require_body_38: true
 
     point_ema_alpha: 0.30
@@ -48,7 +48,7 @@ human_collider_viz_node:
   ros__parameters:
     input_collider_topic: "/human/colliders"
     collider_markers_topic: "/human/collider_markers"
-    collider_marker_rate: 5.0
+    collider_marker_rate: 60.0
     collision_geometry: "capsules"
     sphere_interpolation_level: 0
     sphere_radius_gain: 1.0
