@@ -14,12 +14,10 @@ find_package(visualization_msgs REQUIRED)
 find_package(zed_msgs REQUIRED)
 
 add_executable(human_mapping_node
-  src/human_mapping.cpp
   src/human_mapping_node.cpp
 )
 
 add_executable(human_collider_viz_node
-  src/human_collider_viz.cpp
   src/human_collider_viz_node.cpp
 )
 

@@ -26,9 +26,7 @@ install(
 # ZED Body Fusion
 
 add_executable(zed_body_fusion_node
-  src/zed_body_fusion.cpp
   src/zed_body_fusion_node.cpp
-  src/skeleton_draw_utils.cpp
 )
 
 target_include_directories(zed_body_fusion_node PRIVATE
@@ -56,9 +54,7 @@ ament_target_dependencies(zed_body_fusion_node
 # ZED Body Tracking Overlay
 
 add_executable(zed_skeleton_overlay_node
-  src/zed_skeleton_overlay.cpp
   src/zed_skeleton_overlay_node.cpp
-  src/skeleton_draw_utils.cpp
 )
 
 target_include_directories(zed_skeleton_overlay_node PRIVATE
