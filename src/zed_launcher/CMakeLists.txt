@@ -18,13 +18,21 @@ install(
   DESTINATION share/${PROJECT_NAME}
 )
 
+install(
+  DIRECTORY include/
+  DESTINATION include
+)
+
 # ZED Body Fusion
 
 add_executable(zed_body_fusion_node
+  src/zed_body_fusion.cpp
   src/zed_body_fusion_node.cpp
+  src/skeleton_draw_utils.cpp
 )
 
 target_include_directories(zed_body_fusion_node PRIVATE
+  include
   ${ZED_INCLUDE_DIRS}
   ${OpenCV_INCLUDE_DIRS}
   ${CUDAToolkit_INCLUDE_DIRS}
@@ -48,10 +56,13 @@ ament_target_dependencies(zed_body_fusion_node
 # ZED Body Tracking Overlay
 
 add_executable(zed_skeleton_overlay_node
+  src/zed_skeleton_overlay.cpp
   src/zed_skeleton_overlay_node.cpp
+  src/skeleton_draw_utils.cpp
 )
 
 target_include_directories(zed_skeleton_overlay_node PRIVATE
+  include
   ${ZED_INCLUDE_DIRS}
   ${OpenCV_INCLUDE_DIRS}
   ${CUDAToolkit_INCLUDE_DIRS}

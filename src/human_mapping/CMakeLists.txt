@@ -14,11 +14,21 @@ find_package(visualization_msgs REQUIRED)
 find_package(zed_msgs REQUIRED)
 
 add_executable(human_mapping_node
+  src/human_mapping.cpp
   src/human_mapping_node.cpp
 )
 
 add_executable(human_collider_viz_node
+  src/human_collider_viz.cpp
   src/human_collider_viz_node.cpp
+)
+
+target_include_directories(human_mapping_node PRIVATE
+  include
+)
+
+target_include_directories(human_collider_viz_node PRIVATE
+  include
 )
 
 ament_target_dependencies(human_mapping_node
@@ -47,6 +57,11 @@ install(
 install(
   DIRECTORY config launch
   DESTINATION share/${PROJECT_NAME}
+)
+
+install(
+  DIRECTORY include/
+  DESTINATION include
 )
 
 ament_package()
