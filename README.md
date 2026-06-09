@@ -11,8 +11,8 @@ On the ZED Box:
 ```
 git clone --recursive https://github.com/Abanesjo/zedx_driver_ros2
 ```
-2. Modify the `cyclonedds.xml` file with the network / ethernet interface of the ZED Box
-3. On the `Dockerfile`, ensure the first line is: 
+2. Modify the `src/cyclonedds.xml` file with the network / ethernet interface of the ZED Box
+3. On the `docker/Dockerfile`, ensure the first line is: 
 ```
 FROM stereolabs/zed:5.3.0-py-devel-l4t-r36.4
 ```
@@ -39,8 +39,8 @@ On the Networked Workstation:
 ```
 git clone --recursive https://github.com/Abanesjo/zedx_driver_ros2
 ```
-2. Modify the `cyclonedds.xml` file with the network / ethernet interface of the Workstation
-3. On the `Dockerfile`, ensure the first line is: 
+2. Modify the `src/cyclonedds.xml` file with the network / ethernet interface of the Workstation
+3. On the `docker/Dockerfile`, ensure the first line is: 
 ```
 FROM stereolabs/zed:5.3-gl-devel-cuda12.8-ubuntu22.04
 ```
@@ -70,4 +70,4 @@ You should see a visualization like below
 The axes also show the position of the cameras in the world frame. 
 
 ## Calibration
-To calibrate the cameras, update `calibration.json` with the output obtained from the [ZED360](https://www.stereolabs.com/docs/fusion/zed360) tool.
+To calibrate the cameras, update `src/zed_launcher/calibration/calibration.json` with the output obtained from the [ZED360](https://www.stereolabs.com/docs/fusion/zed360) tool.
