@@ -134,9 +134,6 @@ private:
   std::vector<CapsuleData> buildCapsules(
       const std::array<std::optional<Vec3>, kNumBody38Points> &points);
 
-  std::optional<Vec3> armDistalPoint(const std::optional<Vec3> &elbow,
-                                     const std::optional<Vec3> &wrist) const;
-
   void timerCallback();
 
   bool isStale(int64_t now_ns) const;
@@ -216,8 +213,6 @@ private:
   double thigh_radius_ = 0.065;
 
   double shin_radius_ = 0.065;
-
-  double hand_extension_length_ = 0.16;
 
   std::vector<EMAJumpFilter> point_filters_;
 

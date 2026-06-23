@@ -22,6 +22,10 @@ add_executable(human_collider_viz_node
   src/human_collider_viz_node.cpp
 )
 
+add_executable(human_collider_merge_node
+  src/human_collider_merge_node.cpp
+)
+
 add_executable(zed_hand_mapping_node
   src/zed_hand_mapping_node.cpp
 )
@@ -31,6 +35,10 @@ target_include_directories(human_mapping_node PRIVATE
 )
 
 target_include_directories(human_collider_viz_node PRIVATE
+  include
+)
+
+target_include_directories(human_collider_merge_node PRIVATE
   include
 )
 
@@ -54,7 +62,14 @@ ament_target_dependencies(human_collider_viz_node
   visualization_msgs
 )
 
+ament_target_dependencies(human_collider_merge_node
+  g1_cbf_msg
+  rclcpp
+)
+
 ament_target_dependencies(zed_hand_mapping_node
+  geometry_msgs
+  g1_cbf_msg
   rclcpp
   std_msgs
   zed_msgs
@@ -64,6 +79,7 @@ install(
   TARGETS
     human_mapping_node
     human_collider_viz_node
+    human_collider_merge_node
     zed_hand_mapping_node
   DESTINATION lib/${PROJECT_NAME}
 )

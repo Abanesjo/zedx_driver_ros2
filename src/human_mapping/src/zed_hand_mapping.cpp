@@ -46,6 +46,10 @@ ZedHandMappingNode::ZedHandMappingNode()
       "input_skeleton_topic", "/zed_fusion/body_trk/skeletons");
   output_topic_ =
       declare_parameter<std::string>("output_topic", "/hand_finger_angles");
+  hand_collider_topic_ = declare_parameter<std::string>(
+      "hand_collider_topic", "/human/hand_colliders");
+  fallback_frame_id_ =
+      declare_parameter<std::string>("fallback_frame_id", "fusion_world");
 
   min_valid_hand_points_ = declare_parameter<int>("min_valid_hand_points", 1);
   min_scale_m_ = declare_parameter<double>("min_scale_m", 0.05);
@@ -75,6 +79,12 @@ ZedHandMappingNode::ZedHandMappingNode()
       declare_parameter<std::string>("output_layout", "finger10");
   output_layout_ = parseOutputLayout(output_layout);
   ring_follows_middle_ = declare_parameter<bool>("ring_follows_middle", true);
+  publish_hand_colliders_ =
+      declare_parameter<bool>("publish_hand_colliders", true);
+  open_length_m_ = declare_parameter<double>("open_length_m", 0.18);
+  open_diameter_m_ = declare_parameter<double>("open_diameter_m", 0.18);
+  fist_length_m_ = declare_parameter<double>("fist_length_m", 0.10);
+  fist_diameter_m_ = declare_parameter<double>("fist_diameter_m", 0.10);
   require_body_38_ = declare_parameter<bool>("require_body_38", true);
 
   debug_log_ = declare_parameter<bool>("debug_log", false);
@@ -94,13 +104,16 @@ ZedHandMappingNode::ZedHandMappingNode()
 
   hand_pub_ =
       create_publisher<HandFloat32MultiArray>(output_topic_, sensor_qos);
+  hand_collider_pub_ =
+      create_publisher<HandCapsuleArray>(hand_collider_topic_, sensor_qos);
   skeleton_sub_ = create_subscription<ZedObjectsStamped>(
       input_skeleton_topic_, sensor_qos,
       std::bind(&ZedHandMappingNode::skeletonCallback, this,
                 std::placeholders::_1));
 
-  RCLCPP_INFO(get_logger(), "zed_hand_mapping_node ready: %s -> %s",
-              input_skeleton_topic_.c_str(), output_topic_.c_str());
+  RCLCPP_INFO(get_logger(), "zed_hand_mapping_node ready: %s -> %s, %s",
+              input_skeleton_topic_.c_str(), output_topic_.c_str(),
+              hand_collider_topic_.c_str());
   RCLCPP_INFO(get_logger(), "output_layout=%s, require_body_38=%s",
               layoutName(output_layout_).c_str(),
               require_body_38_ ? "true" : "false");
@@ -131,6 +144,10 @@ void ZedHandMappingNode::skeletonCallback(
   HandFloat32MultiArray out;
   out.data = outputData(left_out, right_out);
   hand_pub_->publish(out);
+
+  if (publish_hand_colliders_) {
+    publishHandColliders(*msg, *obj, left_out, right_out);
+  }
 
   maybeLogDebug(left_est, right_est, left_out, right_out, out.data);
 }
@@ -238,6 +255,23 @@ void ZedHandMappingNode::validateParams() const {
   if (debug_log_period_sec_ <= 0.0) {
     throw std::runtime_error("debug_log_period_sec must be positive");
   }
+
+  auto validate_hand_size = [](const std::string &name, double length,
+                               double diameter) {
+    if (length <= 0.0) {
+      throw std::runtime_error(name + " length must be positive");
+    }
+    if (diameter <= 0.0) {
+      throw std::runtime_error(name + " diameter must be positive");
+    }
+    if (length + kEps < diameter) {
+      throw std::runtime_error(name +
+                               " length must be greater than or equal to "
+                               "diameter");
+    }
+  };
+  validate_hand_size("open hand", open_length_m_, open_diameter_m_);
+  validate_hand_size("fist hand", fist_length_m_, fist_diameter_m_);
 }
 
 HandOutputLayout
@@ -377,6 +411,62 @@ std::vector<float> ZedHandMappingNode::outputData(double left_closure,
 
   return {left5[0], left5[1], left5[2], left5[3], left5[4],
           right5[0], right5[1], right5[2], right5[3], right5[4]};
+}
+
+void ZedHandMappingNode::publishHandColliders(const ZedObjectsStamped &msg,
+                                              const ZedObject &obj,
+                                              double left_closure,
+                                              double right_closure) {
+  HandCapsuleArray colliders;
+  colliders.header = msg.header;
+  if (colliders.header.frame_id.empty()) {
+    colliders.header.frame_id = fallback_frame_id_;
+  }
+  colliders.capsules.reserve(2);
+
+  addHandCollider(colliders, obj, left_cfg_, left_closure);
+  addHandCollider(colliders, obj, right_cfg_, right_closure);
+
+  hand_collider_pub_->publish(colliders);
+}
+
+void ZedHandMappingNode::addHandCollider(HandCapsuleArray &msg,
+                                         const ZedObject &obj,
+                                         const HandSideConfig &cfg,
+                                         double closure) const {
+  const auto wrist = pointAt(obj, cfg.wrist_idx);
+  const auto elbow = pointAt(obj, cfg.elbow_idx);
+  if (!wrist || !elbow) {
+    return;
+  }
+
+  const auto hand_dir = normalize(*wrist - *elbow);
+  if (!hand_dir) {
+    return;
+  }
+
+  const auto [length, diameter] = handDimensions(closure);
+  const double radius = 0.5 * diameter;
+  const double axis_length = std::max(0.0, length - diameter);
+  // Convert outer hand dimensions into Capsule a/b endpoints while keeping the
+  // proximal outer surface at the wrist and extending outward along the forearm.
+  const Vec3 center = *wrist + *hand_dir * (0.5 * length);
+  const Vec3 half_axis = *hand_dir * (0.5 * axis_length);
+
+  HandCapsule cap;
+  cap.name = cfg.name + "_hand";
+  cap.a = toPoint(center - half_axis);
+  cap.b = toPoint(center + half_axis);
+  cap.radius = radius;
+  msg.capsules.push_back(cap);
+}
+
+std::pair<double, double>
+ZedHandMappingNode::handDimensions(double closure) const {
+  const double t = std::clamp(closure, 0.0, 1.0);
+  const double length = open_length_m_ * (1.0 - t) + fist_length_m_ * t;
+  const double diameter = open_diameter_m_ * (1.0 - t) + fist_diameter_m_ * t;
+  return {length, diameter};
 }
 
 double

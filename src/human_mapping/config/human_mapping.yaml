@@ -2,7 +2,7 @@ human_mapping_node:
   ros__parameters:
     input_skeleton_topic: "/zed_fusion/body_trk/skeletons"
     joint_command_topic: "/upper_body_targets_unsafe"
-    collider_topic: "/human/colliders"
+    collider_topic: "/human/body_colliders"
     fallback_frame_id: "fusion_world"
 
     publish_rate_hz: 60.0
@@ -42,12 +42,13 @@ human_mapping_node:
     arm_radius: 0.05
     thigh_radius: 0.065
     shin_radius: 0.065
-    hand_extension_length: 0.16
 
 zed_hand_mapping_node:
   ros__parameters:
     input_skeleton_topic: "/zed_fusion/body_trk/skeletons"
     output_topic: "/hand_finger_angles"
+    hand_collider_topic: "/human/hand_colliders"
+    fallback_frame_id: "fusion_world"
     require_body_38: true
 
     min_valid_hand_points: 1
@@ -74,8 +75,24 @@ zed_hand_mapping_node:
 
     output_layout: "finger10"
     ring_follows_middle: true
+    publish_hand_colliders: true
+    open_length_m: 0.18
+    open_diameter_m: 0.18
+    fist_length_m: 0.10
+    fist_diameter_m: 0.10
     debug_log: false
     debug_log_period_sec: 1.0
+
+human_collider_merge_node:
+  ros__parameters:
+    body_collider_topic: "/human/body_colliders"
+    hand_collider_topic: "/human/hand_colliders"
+    output_collider_topic: "/human/colliders"
+    fallback_frame_id: "fusion_world"
+    include_hand_colliders: true
+    publish_rate_hz: 60.0
+    body_stale_timeout_sec: 1.0
+    hand_stale_timeout_sec: 1.0
 
 human_collider_viz_node:
   ros__parameters:

@@ -173,7 +173,7 @@ HumanMappingNode::HumanMappingNode() : Node("human_mapping_node") {
   joint_command_topic_ = declare_parameter<std::string>(
       "joint_command_topic", "/joint_commands_unsafe");
   collider_topic_ =
-      declare_parameter<std::string>("collider_topic", "/human/colliders");
+      declare_parameter<std::string>("collider_topic", "/human/body_colliders");
   fallback_frame_id_ =
       declare_parameter<std::string>("fallback_frame_id", "fusion_world");
   publish_rate_hz_ = declare_parameter<double>("publish_rate_hz", 50.0);
@@ -227,8 +227,6 @@ HumanMappingNode::HumanMappingNode() : Node("human_mapping_node") {
   arm_radius_ = declare_parameter<double>("arm_radius", 0.05);
   thigh_radius_ = declare_parameter<double>("thigh_radius", 0.065);
   shin_radius_ = declare_parameter<double>("shin_radius", 0.065);
-  hand_extension_length_ =
-      declare_parameter<double>("hand_extension_length", 0.16);
 
   if (joint_names_.size() != kNumJoints) {
     throw std::runtime_error("Parameter 'joint_names' must contain 8 values");
@@ -510,19 +508,8 @@ std::vector<CapsuleData> HumanMappingNode::buildCapsules(
   };
 
   add("torso", kPelvis, kNeck, torso_radius_);
-
-  const auto left_hand = armDistalPoint(points[kLeftElbow], points[kLeftWrist]);
-  const auto right_hand =
-      armDistalPoint(points[kRightElbow], points[kRightWrist]);
-  if (validPoint(points[kLeftElbow]) && validPoint(left_hand)) {
-    capsules.push_back({"left_arm", *points[kLeftElbow], *left_hand,
-                        arm_radius_ * human_radius_scale_});
-  }
-  if (validPoint(points[kRightElbow]) && validPoint(right_hand)) {
-    capsules.push_back({"right_arm", *points[kRightElbow], *right_hand,
-                        arm_radius_ * human_radius_scale_});
-  }
-
+  add("left_arm", kLeftElbow, kLeftWrist, arm_radius_);
+  add("right_arm", kRightElbow, kRightWrist, arm_radius_);
   add("left_shoulder", kLeftShoulder, kLeftElbow, shoulder_radius_);
   add("right_shoulder", kRightShoulder, kRightElbow, shoulder_radius_);
   add("left_thigh", kLeftHip, kLeftKnee, thigh_radius_);
@@ -531,22 +518,6 @@ std::vector<CapsuleData> HumanMappingNode::buildCapsules(
   add("right_shin", kRightKnee, kRightAnkle, shin_radius_);
 
   return capsules;
-}
-
-std::optional<Vec3>
-HumanMappingNode::armDistalPoint(const std::optional<Vec3> &elbow,
-                                 const std::optional<Vec3> &wrist) const {
-  if (!validPoint(wrist)) {
-    return std::nullopt;
-  }
-  if (!validPoint(elbow)) {
-    return wrist;
-  }
-  const auto unit = normalize(*wrist - *elbow);
-  if (!unit) {
-    return wrist;
-  }
-  return *wrist + *unit * hand_extension_length_;
 }
 
 void HumanMappingNode::timerCallback() {

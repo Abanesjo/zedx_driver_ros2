@@ -7,8 +7,11 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
+#include <g1_cbf_msg/msg/capsule.hpp>
+#include <g1_cbf_msg/msg/capsule_array.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <std_msgs/msg/float32_multi_array.hpp>
 #include <zed_msgs/msg/object.hpp>
@@ -17,6 +20,8 @@
 namespace human_mapping {
 
 using HandFloat32MultiArray = std_msgs::msg::Float32MultiArray;
+using HandCapsule = g1_cbf_msg::msg::Capsule;
+using HandCapsuleArray = g1_cbf_msg::msg::CapsuleArray;
 using ZedObject = zed_msgs::msg::Object;
 using ZedObjectsStamped = zed_msgs::msg::ObjectsStamped;
 
@@ -106,6 +111,14 @@ private:
   std::vector<float> outputData(double left_closure,
                                 double right_closure) const;
 
+  void publishHandColliders(const ZedObjectsStamped &msg, const ZedObject &obj,
+                            double left_closure, double right_closure);
+
+  void addHandCollider(HandCapsuleArray &msg, const ZedObject &obj,
+                       const HandSideConfig &cfg, double closure) const;
+
+  std::pair<double, double> handDimensions(double closure) const;
+
   double meanPairwiseDistance(const std::vector<Vec3> &points) const;
 
   bool validPoint(const Vec3 &point) const;
@@ -121,6 +134,10 @@ private:
   std::string input_skeleton_topic_;
 
   std::string output_topic_;
+
+  std::string hand_collider_topic_;
+
+  std::string fallback_frame_id_;
 
   double min_scale_m_ = 0.05;
 
@@ -150,6 +167,16 @@ private:
 
   bool ring_follows_middle_ = true;
 
+  bool publish_hand_colliders_ = true;
+
+  double open_length_m_ = 0.18;
+
+  double open_diameter_m_ = 0.18;
+
+  double fist_length_m_ = 0.10;
+
+  double fist_diameter_m_ = 0.10;
+
   bool require_body_38_ = true;
 
   bool debug_log_ = false;
@@ -169,6 +196,8 @@ private:
   int64_t last_debug_log_ns_ = 0;
 
   rclcpp::Publisher<HandFloat32MultiArray>::SharedPtr hand_pub_;
+
+  rclcpp::Publisher<HandCapsuleArray>::SharedPtr hand_collider_pub_;
 
   rclcpp::Subscription<ZedObjectsStamped>::SharedPtr skeleton_sub_;
 };
