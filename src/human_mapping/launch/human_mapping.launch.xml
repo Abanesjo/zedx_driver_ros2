@@ -2,6 +2,8 @@
   <arg name="input_skeleton_topic" default="/zed_fusion/body_trk/skeletons"/>
   <arg name="joint_command_topic" default="/upper_body_targets_unsafe"/>
   <arg name="collider_topic" default="/human/colliders"/>
+  <arg name="enable_hand_mapping" default="true"/>
+  <arg name="hand_finger_angles_topic" default="/hand_finger_angles"/>
   <arg name="publish_collider_markers" default="true"/>
   <arg name="collider_markers_topic" default="/human/collider_markers"/>
   <arg name="collider_marker_rate" default="5.0"/>
@@ -16,6 +18,14 @@
     <param name="joint_command_topic" value="$(var joint_command_topic)"/>
     <param name="collider_topic" value="$(var collider_topic)"/>
   </node>
+
+  <group if="$(var enable_hand_mapping)">
+    <node pkg="human_mapping" exec="zed_hand_mapping_node" name="zed_hand_mapping_node" output="screen">
+      <param from="$(var config)"/>
+      <param name="input_skeleton_topic" value="$(var input_skeleton_topic)"/>
+      <param name="output_topic" value="$(var hand_finger_angles_topic)"/>
+    </node>
+  </group>
 
   <group if="$(var publish_collider_markers)">
     <node pkg="human_mapping" exec="human_collider_viz_node" name="human_collider_viz_node" output="screen">

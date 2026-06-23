@@ -44,6 +44,39 @@ human_mapping_node:
     shin_radius: 0.065
     hand_extension_length: 0.16
 
+zed_hand_mapping_node:
+  ros__parameters:
+    input_skeleton_topic: "/zed_fusion/body_trk/skeletons"
+    output_topic: "/hand_finger_angles"
+    require_body_38: true
+
+    min_valid_hand_points: 1
+    min_scale_m: 0.05
+    fallback_scale_m: 0.25
+
+    open_score_ref: 0.45
+    fist_score_ref: 0.20
+    left_open_score_ref: -1.0
+    left_fist_score_ref: -1.0
+    right_open_score_ref: -1.0
+    right_fist_score_ref: -1.0
+
+    spread_weight: 0.60
+    extension_weight: 0.40
+    closure_ema_alpha: 0.30
+    open_threshold: 0.35
+    fist_threshold: 0.65
+
+    publish_continuous_open_amount: false
+    missing_timeout_sec: 0.50
+    timeout_state: 1.0
+    hold_last_on_timeout: true
+
+    output_layout: "finger10"
+    ring_follows_middle: true
+    debug_log: false
+    debug_log_period_sec: 1.0
+
 human_collider_viz_node:
   ros__parameters:
     input_collider_topic: "/human/colliders"

@@ -10,6 +10,7 @@ find_package(geometry_msgs REQUIRED)
 find_package(g1_cbf_msg REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(sensor_msgs REQUIRED)
+find_package(std_msgs REQUIRED)
 find_package(visualization_msgs REQUIRED)
 find_package(zed_msgs REQUIRED)
 
@@ -21,11 +22,19 @@ add_executable(human_collider_viz_node
   src/human_collider_viz_node.cpp
 )
 
+add_executable(zed_hand_mapping_node
+  src/zed_hand_mapping_node.cpp
+)
+
 target_include_directories(human_mapping_node PRIVATE
   include
 )
 
 target_include_directories(human_collider_viz_node PRIVATE
+  include
+)
+
+target_include_directories(zed_hand_mapping_node PRIVATE
   include
 )
 
@@ -45,10 +54,17 @@ ament_target_dependencies(human_collider_viz_node
   visualization_msgs
 )
 
+ament_target_dependencies(zed_hand_mapping_node
+  rclcpp
+  std_msgs
+  zed_msgs
+)
+
 install(
   TARGETS
     human_mapping_node
     human_collider_viz_node
+    zed_hand_mapping_node
   DESTINATION lib/${PROJECT_NAME}
 )
 
