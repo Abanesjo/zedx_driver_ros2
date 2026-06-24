@@ -34,6 +34,8 @@ RUN apt-get install -y --no-install-recommends \
     python3-pip \
     libyaml-cpp-dev \
     libeigen3-dev \
+    libopencv-dev \
+    nlohmann-json3-dev \
     libboost-all-dev \
     libspdlog-dev \
     libfmt-dev \

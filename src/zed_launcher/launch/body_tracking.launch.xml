@@ -31,11 +31,38 @@
   <arg name="publish_frame_id" default="fusion_world" />
   <arg name="output_topic" default="body_trk/skeletons" />
   <arg name="camera_resolution" default="HD1080" />
-  <arg name="publish_images" default="false" />
+  <arg name="enable_apriltag_fusion" default="false" />
+  <arg name="publish_images" default="$(var enable_apriltag_fusion)" />
   <arg name="publish_overlay_images" default="$(var debug)" />
   <arg name="publish_per_camera_skeletons" default="$(var debug)" />
   <arg name="overlay_min_confidence" default="$(var confidence_threshold)" />
   <arg name="overlay_max_skeleton_age_sec" default="0.5" />
+  <arg name="apriltag_camera_name" default="$(var left_camera_name)" />
+  <arg
+    name="apriltag_image_topic"
+    default="/$(var apriltag_camera_name)/zed_node/rgb/color/rect/image"
+  />
+  <arg
+    name="apriltag_camera_info_topic"
+    default="/$(var apriltag_camera_name)/zed_node/rgb/color/rect/camera_info"
+  />
+  <arg name="apriltag_target_id" default="0" />
+  <arg name="apriltag_size_m" default="0.06" />
+  <arg name="apriltag_tag_frame_id" default="apriltag_0" />
+  <arg name="apriltag_pelvis_frame_id" default="pelvis" />
+  <arg name="apriltag_pose_topic" default="/tag_pose_fusion_world" />
+  <arg name="apriltag_publish_tag_pose" default="true" />
+  <arg name="apriltag_publish_tf" default="true" />
+  <arg name="apriltag_publish_tag_to_pelvis_tf" default="false" />
+  <arg name="apriltag_tag_to_pelvis_x_m" default="0.0" />
+  <arg name="apriltag_tag_to_pelvis_y_m" default="0.0" />
+  <arg name="apriltag_tag_to_pelvis_z_m" default="0.0" />
+  <arg name="apriltag_tag_to_pelvis_qx" default="0.0" />
+  <arg name="apriltag_tag_to_pelvis_qy" default="0.0" />
+  <arg name="apriltag_tag_to_pelvis_qz" default="0.0" />
+  <arg name="apriltag_tag_to_pelvis_qw" default="1.0" />
+  <arg name="apriltag_max_publish_rate_hz" default="30.0" />
+  <arg name="apriltag_camera_frame_convention" default="zed_x_forward" />
   <!-- Options: PERFORMANCE, QUALITY, ULTRA, NEURAL_LIGHT, NEURAL, NEURAL_PLUS -->
   <arg name="depth_mode" default="NEURAL_LIGHT" />
   <arg name="fusion_reference_frame" default="WORLD" />
@@ -103,6 +130,42 @@
     />
     <param name="sdk_gpu_id" value="$(var sdk_gpu_id)" />
     <param name="sdk_verbose" value="$(var sdk_verbose)" />
+  </node>
+
+  <node
+    if="$(var enable_apriltag_fusion)"
+    pkg="zed_launcher"
+    exec="apriltag_fusion_node"
+    name="apriltag_fusion_node"
+    output="screen"
+  >
+    <param name="camera_name" value="$(var apriltag_camera_name)" />
+    <param name="image_topic" value="$(var apriltag_image_topic)" />
+    <param name="camera_info_topic" value="$(var apriltag_camera_info_topic)" />
+    <param name="fusion_frame_id" value="$(var publish_frame_id)" />
+    <param name="target_tag_id" value="$(var apriltag_target_id)" />
+    <param name="tag_size_m" value="$(var apriltag_size_m)" />
+    <param name="tag_frame_id" value="$(var apriltag_tag_frame_id)" />
+    <param name="pelvis_frame_id" value="$(var apriltag_pelvis_frame_id)" />
+    <param name="pose_topic" value="$(var apriltag_pose_topic)" />
+    <param name="publish_tag_pose" value="$(var apriltag_publish_tag_pose)" />
+    <param name="publish_tf" value="$(var apriltag_publish_tf)" />
+    <param
+      name="publish_tag_to_pelvis_tf"
+      value="$(var apriltag_publish_tag_to_pelvis_tf)"
+    />
+    <param name="tag_to_pelvis_x_m" value="$(var apriltag_tag_to_pelvis_x_m)" />
+    <param name="tag_to_pelvis_y_m" value="$(var apriltag_tag_to_pelvis_y_m)" />
+    <param name="tag_to_pelvis_z_m" value="$(var apriltag_tag_to_pelvis_z_m)" />
+    <param name="tag_to_pelvis_qx" value="$(var apriltag_tag_to_pelvis_qx)" />
+    <param name="tag_to_pelvis_qy" value="$(var apriltag_tag_to_pelvis_qy)" />
+    <param name="tag_to_pelvis_qz" value="$(var apriltag_tag_to_pelvis_qz)" />
+    <param name="tag_to_pelvis_qw" value="$(var apriltag_tag_to_pelvis_qw)" />
+    <param name="max_publish_rate_hz" value="$(var apriltag_max_publish_rate_hz)" />
+    <param
+      name="camera_frame_convention"
+      value="$(var apriltag_camera_frame_convention)"
+    />
   </node>
 
   <node

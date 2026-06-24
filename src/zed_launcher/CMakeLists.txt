@@ -81,8 +81,34 @@ ament_target_dependencies(zed_skeleton_overlay_node
   zed_msgs
 )
 
+# AprilTag pose in ZED fusion frame
+
+add_executable(apriltag_fusion_node
+  src/apriltag_fusion_node.cpp
+)
+
+target_compile_features(apriltag_fusion_node PRIVATE cxx_std_17)
+
+target_include_directories(apriltag_fusion_node PRIVATE
+  include
+  ${OpenCV_INCLUDE_DIRS}
+)
+
+target_link_libraries(apriltag_fusion_node
+  ${OpenCV_LIBRARIES}
+)
+
+ament_target_dependencies(apriltag_fusion_node
+  geometry_msgs
+  rclcpp
+  sensor_msgs
+  tf2
+  tf2_ros
+)
+
 install(
   TARGETS
+    apriltag_fusion_node
     zed_body_fusion_node
     zed_skeleton_overlay_node
   DESTINATION lib/${PROJECT_NAME}
