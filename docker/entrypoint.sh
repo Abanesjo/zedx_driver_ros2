@@ -30,7 +30,7 @@ export CYCLONEDDS_URI=file:///workspace/ros2_ws/src/zedx_driver/cyclonedds.xml
 alias mujoco='export LD_LIBRARY_PATH=/usr/local/lib:/usr/lib/x86_64-linux-gnu'
 export XLA_PYTHON_CLIENT_MEM_FRACTION=".50"
 export CAM_MODEL="zedx"
-export ZED_BOX_IP="192.168.0.133"
+export ZED_BOX_IP="192.168.0.200"
 EOF
 fi
 
