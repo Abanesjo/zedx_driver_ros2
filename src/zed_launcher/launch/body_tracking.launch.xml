@@ -1,6 +1,7 @@
 <launch>
+  <arg name="camera_resolution" default="HD1080" />
+  <arg name="camera_fps" default="30" />
   <arg name="debug" default="false" />
-  <arg name="camera_fps" default="60" />
   <arg name="fusion_publish_rate_hz" default="60.0" />
 
   <arg name="role" default="local" />
@@ -33,7 +34,6 @@
   <arg name="single_body_switch_frames" default="60" />
   <arg name="publish_frame_id" default="fusion_world" />
   <arg name="output_topic" default="body_trk/skeletons" />
-  <arg name="camera_resolution" default="HD1080" />
   <arg name="enable_apriltag_fusion" default="true" />
   <arg name="publish_images" default="$(var enable_apriltag_fusion)" />
   <arg name="publish_overlay_images" default="$(var debug)" />
