@@ -5,7 +5,7 @@ human_mapping_node:
     collider_topic: "/human/body_colliders"
     fallback_frame_id: "fusion_world"
 
-    publish_rate_hz: 60.0
+    publish_rate_hz: 30.0
     stale_timeout_sec: 1.0
     min_confidence: 30.0
     require_body_38: true
@@ -90,7 +90,7 @@ human_collider_merge_node:
     output_collider_topic: "/human/colliders"
     fallback_frame_id: "fusion_world"
     include_hand_colliders: true
-    publish_rate_hz: 60.0
+    publish_rate_hz: 30.0
     body_stale_timeout_sec: 1.0
     hand_stale_timeout_sec: 1.0
 
@@ -98,7 +98,7 @@ human_collider_viz_node:
   ros__parameters:
     input_collider_topic: "/human/colliders"
     collider_markers_topic: "/human/collider_markers"
-    collider_marker_rate: 60.0
+    collider_marker_rate: 30.0
     collision_geometry: "capsules"
     sphere_interpolation_level: 0
     sphere_radius_gain: 1.0

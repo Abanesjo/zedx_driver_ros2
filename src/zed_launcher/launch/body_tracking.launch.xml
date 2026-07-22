@@ -2,7 +2,7 @@
   <arg name="camera_resolution" default="HD1080" />
   <arg name="camera_fps" default="30" />
   <arg name="debug" default="false" />
-  <arg name="fusion_publish_rate_hz" default="60.0" />
+  <arg name="fusion_publish_rate_hz" default="30.0" />
 
   <arg name="role" default="local" />
   <arg name="input_mode" default="stream" />
@@ -31,7 +31,7 @@
   <!-- when switching from one skeleton to another, the confidence difference must be greater than the margin -->
   <arg name="single_body_switch_margin" default="10.0" />
   <!-- confidence must be greater for X frames -->
-  <arg name="single_body_switch_frames" default="60" />
+  <arg name="single_body_switch_frames" default="30" />
   <arg name="publish_frame_id" default="fusion_world" />
   <arg name="output_topic" default="body_trk/skeletons" />
   <arg name="enable_apriltag_fusion" default="true" />
