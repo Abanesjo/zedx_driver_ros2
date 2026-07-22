@@ -6,12 +6,15 @@
   <arg name="role" default="local" />
   <arg name="input_mode" default="stream" />
   <arg name="stream_address" default="$(env ZED_BOX_IP 127.0.0.1)" />
-  <arg name="left_stream_port" default="30000" />
-  <arg name="right_stream_port" default="30002" />
-  <arg name="left_camera_name" default="zed_left" />
-  <arg name="right_camera_name" default="zed_right" />
-  <arg name="left_serial" default="41235597" />
-  <arg name="right_serial" default="49967328" />
+  <arg
+    name="camera_names"
+    default="['zed_left', 'zed_center', 'zed_right']"
+  />
+  <arg
+    name="camera_serials"
+    default="[41235597, 46229474, 49967328]"
+  />
+  <arg name="stream_ports" default="[30000, 30004, 30002]" />
   <arg
     name="fusion_config_path"
     default="$(find-pkg-share zed_launcher)/calibration/calibration.json"
@@ -31,37 +34,33 @@
   <arg name="publish_frame_id" default="fusion_world" />
   <arg name="output_topic" default="body_trk/skeletons" />
   <arg name="camera_resolution" default="HD1080" />
-  <arg name="enable_apriltag_fusion" default="false" />
+  <arg name="enable_apriltag_fusion" default="true" />
   <arg name="publish_images" default="$(var enable_apriltag_fusion)" />
   <arg name="publish_overlay_images" default="$(var debug)" />
   <arg name="publish_per_camera_skeletons" default="$(var debug)" />
   <arg name="overlay_min_confidence" default="$(var confidence_threshold)" />
   <arg name="overlay_max_skeleton_age_sec" default="0.5" />
-  <arg name="apriltag_camera_name" default="$(var left_camera_name)" />
-  <arg
-    name="apriltag_image_topic"
-    default="/$(var apriltag_camera_name)/zed_node/rgb/color/rect/image"
-  />
-  <arg
-    name="apriltag_camera_info_topic"
-    default="/$(var apriltag_camera_name)/zed_node/rgb/color/rect/camera_info"
-  />
   <arg name="apriltag_target_id" default="0" />
   <arg name="apriltag_size_m" default="0.06" />
   <arg name="apriltag_tag_frame_id" default="apriltag_0" />
-  <arg name="apriltag_pelvis_frame_id" default="pelvis" />
-  <arg name="apriltag_pose_topic" default="/tag_pose_fusion_world" />
-  <arg name="apriltag_publish_tag_pose" default="true" />
+  <arg
+    name="apriltag_pose_topic"
+    default="/fusion_world_pose_in_apriltag"
+  />
+  <arg name="apriltag_publish_fusion_pose" default="true" />
   <arg name="apriltag_publish_tf" default="true" />
-  <arg name="apriltag_publish_tag_to_pelvis_tf" default="false" />
-  <arg name="apriltag_tag_to_pelvis_x_m" default="0.0" />
-  <arg name="apriltag_tag_to_pelvis_y_m" default="0.0" />
-  <arg name="apriltag_tag_to_pelvis_z_m" default="0.0" />
-  <arg name="apriltag_tag_to_pelvis_qx" default="0.0" />
-  <arg name="apriltag_tag_to_pelvis_qy" default="0.0" />
-  <arg name="apriltag_tag_to_pelvis_qz" default="0.0" />
-  <arg name="apriltag_tag_to_pelvis_qw" default="1.0" />
-  <arg name="apriltag_max_publish_rate_hz" default="30.0" />
+  <arg name="apriltag_max_detection_rate_hz" default="30.0" />
+  <arg name="apriltag_fusion_publish_rate_hz" default="30.0" />
+  <arg name="apriltag_max_observation_age_sec" default="0.15" />
+  <arg name="apriltag_sync_tolerance_sec" default="0.05" />
+  <arg name="apriltag_min_marker_area_px2" default="64.0" />
+  <arg name="apriltag_max_reprojection_rmse_px" default="3.0" />
+  <arg name="apriltag_max_translation_disagreement_m" default="0.25" />
+  <arg name="apriltag_max_rotation_disagreement_deg" default="25.0" />
+  <arg name="apriltag_smoothing_time_constant_sec" default="0.10" />
+  <arg name="apriltag_smoothing_reset_sec" default="0.5" />
+  <arg name="apriltag_dictionary" default="APRILTAG_36h11" />
+  <arg name="apriltag_corner_refinement" default="true" />
   <arg name="apriltag_camera_frame_convention" default="zed_x_forward" />
   <!-- Options: PERFORMANCE, QUALITY, ULTRA, NEURAL_LIGHT, NEURAL, NEURAL_PLUS -->
   <arg name="depth_mode" default="NEURAL_LIGHT" />
@@ -92,12 +91,9 @@
     <param name="role" value="$(var role)" />
     <param name="input_mode" value="$(var input_mode)" />
     <param name="stream_address" value="$(var stream_address)" />
-    <param name="left_stream_port" value="$(var left_stream_port)" />
-    <param name="right_stream_port" value="$(var right_stream_port)" />
-    <param name="left_camera_name" value="$(var left_camera_name)" />
-    <param name="right_camera_name" value="$(var right_camera_name)" />
-    <param name="left_serial" value="$(var left_serial)" />
-    <param name="right_serial" value="$(var right_serial)" />
+    <param name="camera_names" value="$(var camera_names)" />
+    <param name="camera_serials" value="$(var camera_serials)" />
+    <param name="stream_ports" value="$(var stream_ports)" />
     <param name="fusion_config_path" value="$(var fusion_config_path)" />
     <param name="body_model" value="$(var body_model)" />
     <param name="body_format" value="$(var body_format)" />
@@ -139,29 +135,62 @@
     name="apriltag_fusion_node"
     output="screen"
   >
-    <param name="camera_name" value="$(var apriltag_camera_name)" />
-    <param name="image_topic" value="$(var apriltag_image_topic)" />
-    <param name="camera_info_topic" value="$(var apriltag_camera_info_topic)" />
+    <param name="camera_names" value="$(var camera_names)" />
     <param name="fusion_frame_id" value="$(var publish_frame_id)" />
     <param name="target_tag_id" value="$(var apriltag_target_id)" />
     <param name="tag_size_m" value="$(var apriltag_size_m)" />
     <param name="tag_frame_id" value="$(var apriltag_tag_frame_id)" />
-    <param name="pelvis_frame_id" value="$(var apriltag_pelvis_frame_id)" />
     <param name="pose_topic" value="$(var apriltag_pose_topic)" />
-    <param name="publish_tag_pose" value="$(var apriltag_publish_tag_pose)" />
+    <param
+      name="publish_fusion_pose"
+      value="$(var apriltag_publish_fusion_pose)"
+    />
     <param name="publish_tf" value="$(var apriltag_publish_tf)" />
     <param
-      name="publish_tag_to_pelvis_tf"
-      value="$(var apriltag_publish_tag_to_pelvis_tf)"
+      name="max_detection_rate_hz"
+      value="$(var apriltag_max_detection_rate_hz)"
     />
-    <param name="tag_to_pelvis_x_m" value="$(var apriltag_tag_to_pelvis_x_m)" />
-    <param name="tag_to_pelvis_y_m" value="$(var apriltag_tag_to_pelvis_y_m)" />
-    <param name="tag_to_pelvis_z_m" value="$(var apriltag_tag_to_pelvis_z_m)" />
-    <param name="tag_to_pelvis_qx" value="$(var apriltag_tag_to_pelvis_qx)" />
-    <param name="tag_to_pelvis_qy" value="$(var apriltag_tag_to_pelvis_qy)" />
-    <param name="tag_to_pelvis_qz" value="$(var apriltag_tag_to_pelvis_qz)" />
-    <param name="tag_to_pelvis_qw" value="$(var apriltag_tag_to_pelvis_qw)" />
-    <param name="max_publish_rate_hz" value="$(var apriltag_max_publish_rate_hz)" />
+    <param
+      name="fusion_publish_rate_hz"
+      value="$(var apriltag_fusion_publish_rate_hz)"
+    />
+    <param
+      name="max_observation_age_sec"
+      value="$(var apriltag_max_observation_age_sec)"
+    />
+    <param
+      name="sync_tolerance_sec"
+      value="$(var apriltag_sync_tolerance_sec)"
+    />
+    <param
+      name="min_marker_area_px2"
+      value="$(var apriltag_min_marker_area_px2)"
+    />
+    <param
+      name="max_reprojection_rmse_px"
+      value="$(var apriltag_max_reprojection_rmse_px)"
+    />
+    <param
+      name="max_translation_disagreement_m"
+      value="$(var apriltag_max_translation_disagreement_m)"
+    />
+    <param
+      name="max_rotation_disagreement_deg"
+      value="$(var apriltag_max_rotation_disagreement_deg)"
+    />
+    <param
+      name="smoothing_time_constant_sec"
+      value="$(var apriltag_smoothing_time_constant_sec)"
+    />
+    <param
+      name="smoothing_reset_sec"
+      value="$(var apriltag_smoothing_reset_sec)"
+    />
+    <param name="dictionary" value="$(var apriltag_dictionary)" />
+    <param
+      name="corner_refinement"
+      value="$(var apriltag_corner_refinement)"
+    />
     <param
       name="camera_frame_convention"
       value="$(var apriltag_camera_frame_convention)"

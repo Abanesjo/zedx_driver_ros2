@@ -10,6 +10,8 @@ Panels:
         - /Image1/Topic1
         - /Image2
         - /Image2/Topic1
+        - /Image3
+        - /Image3/Topic1
       Splitter Ratio: 0.5
     Tree Height: 497
   - Class: rviz_common/Selection
@@ -64,6 +66,20 @@ Visualization Manager:
         History Policy: Keep Last
         Reliability Policy: Best Effort
         Value: /zed_left/zed_node/rgb/color/rect/skeleton_overlay
+      Value: true
+    - Class: rviz_default_plugins/Image
+      Enabled: true
+      Max Value: 1
+      Median window: 5
+      Min Value: 0
+      Name: Image
+      Normalize Range: true
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+        Value: /zed_center/zed_node/rgb/color/rect/skeleton_overlay
       Value: true
     - Class: rviz_default_plugins/Image
       Enabled: true

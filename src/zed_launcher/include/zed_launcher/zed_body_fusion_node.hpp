@@ -30,6 +30,12 @@ public:
   ~ZedBodyFusionNode() override;
 
 private:
+  struct CameraSpec {
+    std::string name;
+    unsigned int serial_number = 0;
+    int stream_port = 0;
+  };
+
   struct CameraWorker {
     sl::FusionConfiguration config;
     sl::Camera camera;
@@ -51,11 +57,15 @@ private:
 
   void normalizeMode();
 
-  int streamPortForConfig(const sl::FusionConfiguration &config,
-                          size_t index) const;
+  void validateFusionConfigurations() const;
 
-  std::string cameraNameForConfig(const sl::FusionConfiguration &config,
-                                  size_t index) const;
+  const CameraSpec &
+  cameraSpecForConfig(const sl::FusionConfiguration &config) const;
+
+  int streamPortForConfig(const sl::FusionConfiguration &config) const;
+
+  std::string
+  cameraNameForConfig(const sl::FusionConfiguration &config) const;
 
   std::string imageTopicForCamera(const std::string &camera_name) const;
 
@@ -68,19 +78,18 @@ private:
   std::string imageFrameForCamera(const std::string &camera_name) const;
 
   geometry_msgs::msg::TransformStamped
-  staticCameraTransformForConfig(const sl::FusionConfiguration &config,
-                                 size_t index);
+  staticCameraTransformForConfig(const sl::FusionConfiguration &config);
 
   void publishStaticCameraTransforms();
 
   sensor_msgs::msg::CameraInfo
   makeCameraInfo(sl::Camera &camera, const std::string &frame_id) const;
 
-  void configureImagePublishing(CameraWorker &worker, size_t index);
+  void configureImagePublishing(CameraWorker &worker);
 
-  void configureOverlayPublishing(CameraWorker &worker, size_t index);
+  void configureOverlayPublishing(CameraWorker &worker);
 
-  void configurePerCameraBodyPublishing(CameraWorker &worker, size_t index);
+  void configurePerCameraBodyPublishing(CameraWorker &worker);
 
   bool hasImageSubscribers(const CameraWorker &worker) const;
 
@@ -159,10 +168,6 @@ private:
 
   std::string stream_address_;
 
-  std::string left_camera_name_;
-
-  std::string right_camera_name_;
-
   sl::BODY_TRACKING_MODEL body_model_ =
       sl::BODY_TRACKING_MODEL::HUMAN_BODY_ACCURATE;
 
@@ -189,19 +194,11 @@ private:
 
   double fusion_skeleton_smoothing_ = 0.0;
 
-  int fusion_minimum_allowed_cameras_ = 1;
+  int fusion_minimum_allowed_cameras_ = 2;
 
   int fusion_minimum_allowed_keypoints_ = 7;
 
   int camera_fps_ = 60;
-
-  int left_stream_port_ = 30000;
-
-  int right_stream_port_ = 30002;
-
-  int left_serial_ = 41235597;
-
-  int right_serial_ = 49967328;
 
   int sdk_gpu_id_ = -1;
 
@@ -234,6 +231,8 @@ private:
   bool allow_reduced_precision_inference_ = false;
 
   int sdk_verbose_ = 1;
+
+  std::vector<CameraSpec> camera_specs_;
 
   std::vector<sl::FusionConfiguration> fusion_configs_;
 

@@ -15,6 +15,7 @@
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <unordered_set>
 #include <vector>
 
 #include <opencv2/imgproc.hpp>
@@ -215,11 +216,7 @@ ZedBodyFusionNode::ZedBodyFusionNode(const rclcpp::NodeOptions &options)
               fusion_config_path_.c_str());
   fusion_configs_ = sl::readFusionConfigurationFile(
       fusion_config_path_, kRosCoordinateSystem, kRosUnits);
-  if (fusion_configs_.size() != 2) {
-    throw std::runtime_error(
-        "Fusion configuration must contain exactly two cameras, found " +
-        std::to_string(fusion_configs_.size()));
-  }
+  validateFusionConfigurations();
 
   configureRuntimeParameters();
   publishStaticCameraTransforms();
@@ -251,10 +248,64 @@ void ZedBodyFusionNode::loadParameters() {
   publish_frame_id_ =
       declare_parameter<std::string>("publish_frame_id", "fusion_world");
   stream_address_ = declare_parameter<std::string>("stream_address", "");
-  left_camera_name_ =
-      declare_parameter<std::string>("left_camera_name", "zed_left");
-  right_camera_name_ =
-      declare_parameter<std::string>("right_camera_name", "zed_right");
+
+  const auto camera_names = declare_parameter<std::vector<std::string>>(
+      "camera_names",
+      std::vector<std::string>{"zed_left", "zed_center", "zed_right"});
+  const auto camera_serials = declare_parameter<std::vector<int64_t>>(
+      "camera_serials",
+      std::vector<int64_t>{41235597, 46229474, 49967328});
+  const auto stream_ports = declare_parameter<std::vector<int64_t>>(
+      "stream_ports", std::vector<int64_t>{30000, 30004, 30002});
+
+  if (camera_names.empty()) {
+    throw std::runtime_error("camera_names must contain at least one camera");
+  }
+  if (camera_names.size() != camera_serials.size() ||
+      camera_names.size() != stream_ports.size()) {
+    throw std::runtime_error(
+        "camera_names, camera_serials, and stream_ports must have equal "
+        "lengths");
+  }
+
+  std::unordered_set<std::string> unique_names;
+  std::unordered_set<int64_t> unique_serials;
+  std::unordered_set<int64_t> unique_ports;
+  camera_specs_.reserve(camera_names.size());
+  for (size_t idx = 0; idx < camera_names.size(); ++idx) {
+    const auto &name = camera_names[idx];
+    const auto serial = camera_serials[idx];
+    const auto port = stream_ports[idx];
+
+    if (name.empty()) {
+      throw std::runtime_error("camera_names entries must be non-empty");
+    }
+    if (serial <= 0 ||
+        serial >
+            static_cast<int64_t>(std::numeric_limits<unsigned int>::max())) {
+      throw std::runtime_error(
+          "camera_serials entries must be positive valid ZED serials");
+    }
+    if (port <= 0 || port > 65534 || port % 2 != 0) {
+      throw std::runtime_error(
+          "stream_ports entries must be even and in the range [2, 65534]");
+    }
+    if (!unique_names.insert(name).second) {
+      throw std::runtime_error("camera_names entries must be unique: " + name);
+    }
+    if (!unique_serials.insert(serial).second) {
+      throw std::runtime_error("camera_serials entries must be unique: " +
+                               std::to_string(serial));
+    }
+    if (!unique_ports.insert(port).second) {
+      throw std::runtime_error("stream_ports entries must be unique: " +
+                               std::to_string(port));
+    }
+
+    camera_specs_.push_back(CameraSpec{name,
+                                       static_cast<unsigned int>(serial),
+                                       static_cast<int>(port)});
+  }
 
   body_model_ = parseBodyModel(
       declare_parameter<std::string>("body_model", "HUMAN_BODY_ACCURATE"));
@@ -274,14 +325,10 @@ void ZedBodyFusionNode::loadParameters() {
   fusion_skeleton_smoothing_ =
       declare_parameter<double>("fusion_skeleton_smoothing", 0.0);
   fusion_minimum_allowed_cameras_ =
-      declare_parameter<int>("fusion_minimum_allowed_cameras", 1);
+      declare_parameter<int>("fusion_minimum_allowed_cameras", 2);
   fusion_minimum_allowed_keypoints_ =
       declare_parameter<int>("fusion_minimum_allowed_keypoints", 7);
   camera_fps_ = declare_parameter<int>("camera_fps", 60);
-  left_stream_port_ = declare_parameter<int>("left_stream_port", 30000);
-  right_stream_port_ = declare_parameter<int>("right_stream_port", 30002);
-  left_serial_ = declare_parameter<int>("left_serial", 41235597);
-  right_serial_ = declare_parameter<int>("right_serial", 49967328);
   sdk_gpu_id_ = declare_parameter<int>("sdk_gpu_id", -1);
   fusion_publish_rate_hz_ =
       declare_parameter<double>("fusion_publish_rate_hz", 60.0);
@@ -330,31 +377,18 @@ void ZedBodyFusionNode::loadParameters() {
   if (camera_fps_ <= 0) {
     throw std::runtime_error("camera_fps must be positive");
   }
-  if ((publish_images_ || publish_overlay_images_) &&
-      (left_camera_name_.empty() || right_camera_name_.empty())) {
-    throw std::runtime_error("left_camera_name and right_camera_name must be "
-                             "non-empty when image publishing is enabled");
-  }
   if (single_body_switch_margin_ < 0.0) {
     throw std::runtime_error("single_body_switch_margin must be non-negative");
   }
   if (single_body_switch_frames_ <= 0) {
     throw std::runtime_error("single_body_switch_frames must be positive");
   }
-  if (left_stream_port_ <= 0 || left_stream_port_ > 65535) {
+  if (fusion_minimum_allowed_cameras_ <= 0 ||
+      fusion_minimum_allowed_cameras_ >
+          static_cast<int>(camera_specs_.size())) {
     throw std::runtime_error(
-        "left_stream_port must be in the range [1, 65535]");
-  }
-  if (right_stream_port_ <= 0 || right_stream_port_ > 65535) {
-    throw std::runtime_error(
-        "right_stream_port must be in the range [1, 65535]");
-  }
-  if (left_stream_port_ == right_stream_port_) {
-    throw std::runtime_error(
-        "left_stream_port and right_stream_port must be different");
-  }
-  if (left_serial_ > 0 && right_serial_ > 0 && left_serial_ == right_serial_) {
-    throw std::runtime_error("left_serial and right_serial must be different");
+        "fusion_minimum_allowed_cameras must be in the range [1, " +
+        std::to_string(camera_specs_.size()) + "]");
   }
 }
 
@@ -377,55 +411,63 @@ void ZedBodyFusionNode::normalizeMode() {
   }
 }
 
-int ZedBodyFusionNode::streamPortForConfig(
-    const sl::FusionConfiguration &config, size_t index) const {
-  const auto serial = static_cast<int>(config.serial_number);
-  if (left_serial_ > 0 && serial == left_serial_) {
-    return left_stream_port_;
-  }
-  if (right_serial_ > 0 && serial == right_serial_) {
-    return right_stream_port_;
-  }
-
-  const bool strict_serial_mapping = left_serial_ > 0 && right_serial_ > 0;
-  if (strict_serial_mapping) {
+void ZedBodyFusionNode::validateFusionConfigurations() const {
+  if (fusion_configs_.size() != camera_specs_.size()) {
     throw std::runtime_error(
-        "Calibration camera serial " + std::to_string(serial) +
-        " does not match configured left_serial " +
-        std::to_string(left_serial_) + " or right_serial " +
-        std::to_string(right_serial_));
+        "Fusion configuration camera count " +
+        std::to_string(fusion_configs_.size()) +
+        " does not match configured camera count " +
+        std::to_string(camera_specs_.size()));
   }
 
-  if (index == 0) {
-    return left_stream_port_;
-  }
-  if (index == 1) {
-    return right_stream_port_;
-  }
+  std::unordered_set<unsigned int> calibration_serials;
+  for (const auto &config : fusion_configs_) {
+    const auto serial = static_cast<int64_t>(config.serial_number);
+    if (serial <= 0 ||
+        serial >
+            static_cast<int64_t>(std::numeric_limits<unsigned int>::max())) {
+      throw std::runtime_error(
+          "Fusion configuration contains an invalid camera serial: " +
+          std::to_string(serial));
+    }
 
-  throw std::runtime_error("No stream port configured for camera serial " +
-                           std::to_string(serial));
+    const auto unsigned_serial = static_cast<unsigned int>(serial);
+    if (!calibration_serials.insert(unsigned_serial).second) {
+      throw std::runtime_error(
+          "Fusion configuration contains duplicate camera serial: " +
+          std::to_string(serial));
+    }
+
+    (void)cameraSpecForConfig(config);
+  }
 }
 
-std::string
-ZedBodyFusionNode::cameraNameForConfig(const sl::FusionConfiguration &config,
-                                       size_t index) const {
-  const auto serial = static_cast<int>(config.serial_number);
-  if (left_serial_ > 0 && serial == left_serial_) {
-    return left_camera_name_;
+const ZedBodyFusionNode::CameraSpec &
+ZedBodyFusionNode::cameraSpecForConfig(
+    const sl::FusionConfiguration &config) const {
+  const auto serial = static_cast<int64_t>(config.serial_number);
+  const auto spec =
+      std::find_if(camera_specs_.begin(), camera_specs_.end(),
+                   [serial](const CameraSpec &candidate) {
+                     return static_cast<int64_t>(candidate.serial_number) ==
+                            serial;
+                   });
+  if (spec == camera_specs_.end()) {
+    throw std::runtime_error("Calibration camera serial " +
+                             std::to_string(serial) +
+                             " is not present in camera_serials");
   }
-  if (right_serial_ > 0 && serial == right_serial_) {
-    return right_camera_name_;
-  }
+  return *spec;
+}
 
-  if (index == 0) {
-    return left_camera_name_;
-  }
-  if (index == 1) {
-    return right_camera_name_;
-  }
+int ZedBodyFusionNode::streamPortForConfig(
+    const sl::FusionConfiguration &config) const {
+  return cameraSpecForConfig(config).stream_port;
+}
 
-  return "zed_" + std::to_string(index);
+std::string ZedBodyFusionNode::cameraNameForConfig(
+    const sl::FusionConfiguration &config) const {
+  return cameraSpecForConfig(config).name;
 }
 
 std::string
@@ -455,12 +497,11 @@ ZedBodyFusionNode::imageFrameForCamera(const std::string &camera_name) const {
 
 geometry_msgs::msg::TransformStamped
 ZedBodyFusionNode::staticCameraTransformForConfig(
-    const sl::FusionConfiguration &config, size_t index) {
+    const sl::FusionConfiguration &config) {
   geometry_msgs::msg::TransformStamped transform;
   transform.header.stamp = now();
   transform.header.frame_id = publish_frame_id_;
-  transform.child_frame_id =
-      imageFrameForCamera(cameraNameForConfig(config, index));
+  transform.child_frame_id = imageFrameForCamera(cameraNameForConfig(config));
 
   const auto translation = config.pose.getTranslation();
   const auto orientation = config.pose.getOrientation();
@@ -479,12 +520,12 @@ void ZedBodyFusionNode::publishStaticCameraTransforms() {
   std::vector<geometry_msgs::msg::TransformStamped> transforms;
   transforms.reserve(fusion_configs_.size());
 
-  for (size_t idx = 0; idx < fusion_configs_.size(); ++idx) {
-    auto transform = staticCameraTransformForConfig(fusion_configs_[idx], idx);
+  for (const auto &config : fusion_configs_) {
+    auto transform = staticCameraTransformForConfig(config);
     RCLCPP_INFO(
         get_logger(), "Publishing static camera TF %s -> %s for serial %u",
         transform.header.frame_id.c_str(), transform.child_frame_id.c_str(),
-        static_cast<unsigned int>(fusion_configs_[idx].serial_number));
+        static_cast<unsigned int>(config.serial_number));
     transforms.push_back(std::move(transform));
   }
 
@@ -535,13 +576,12 @@ ZedBodyFusionNode::makeCameraInfo(sl::Camera &camera,
   return msg;
 }
 
-void ZedBodyFusionNode::configureImagePublishing(CameraWorker &worker,
-                                                 size_t index) {
+void ZedBodyFusionNode::configureImagePublishing(CameraWorker &worker) {
   if (!publish_images_) {
     return;
   }
 
-  worker.camera_name = cameraNameForConfig(worker.config, index);
+  worker.camera_name = cameraNameForConfig(worker.config);
   worker.image_frame_id = imageFrameForCamera(worker.camera_name);
   worker.camera_info = makeCameraInfo(worker.camera, worker.image_frame_id);
   worker.image_pub = create_publisher<sensor_msgs::msg::Image>(
@@ -555,13 +595,12 @@ void ZedBodyFusionNode::configureImagePublishing(CameraWorker &worker,
               worker.serial_number, worker.camera_info_pub->get_topic_name());
 }
 
-void ZedBodyFusionNode::configureOverlayPublishing(CameraWorker &worker,
-                                                   size_t index) {
+void ZedBodyFusionNode::configureOverlayPublishing(CameraWorker &worker) {
   if (!publish_overlay_images_) {
     return;
   }
 
-  worker.camera_name = cameraNameForConfig(worker.config, index);
+  worker.camera_name = cameraNameForConfig(worker.config);
   worker.image_frame_id = imageFrameForCamera(worker.camera_name);
   worker.overlay_image_pub = create_publisher<sensor_msgs::msg::Image>(
       overlayImageTopicForCamera(worker.camera_name), rclcpp::SensorDataQoS());
@@ -571,13 +610,13 @@ void ZedBodyFusionNode::configureOverlayPublishing(CameraWorker &worker,
               worker.serial_number, worker.overlay_image_pub->get_topic_name());
 }
 
-void ZedBodyFusionNode::configurePerCameraBodyPublishing(CameraWorker &worker,
-                                                         size_t index) {
+void ZedBodyFusionNode::configurePerCameraBodyPublishing(
+    CameraWorker &worker) {
   if (!publish_per_camera_skeletons_) {
     return;
   }
 
-  worker.camera_name = cameraNameForConfig(worker.config, index);
+  worker.camera_name = cameraNameForConfig(worker.config);
   worker.image_frame_id = imageFrameForCamera(worker.camera_name);
   worker.bodies_pub = create_publisher<zed_msgs::msg::ObjectsStamped>(
       bodiesTopicForCamera(worker.camera_name), rclcpp::SensorDataQoS());
@@ -826,7 +865,7 @@ void ZedBodyFusionNode::startCameraPublishers() {
 
     sl::InitParameters init_params;
     if (input_mode_ == "stream") {
-      const auto stream_port = streamPortForConfig(config, idx);
+      const auto stream_port = streamPortForConfig(config);
       init_params.input.setFromStream(stream_address_.c_str(),
                                       static_cast<unsigned short>(stream_port));
       RCLCPP_INFO(
@@ -854,9 +893,19 @@ void ZedBodyFusionNode::startCameraPublishers() {
                                zedErrorToString(err));
     }
 
-    configurePerCameraBodyPublishing(*worker, idx);
-    configureImagePublishing(*worker, idx);
-    configureOverlayPublishing(*worker, idx);
+    const auto opened_serial =
+        worker->camera.getCameraInformation().serial_number;
+    if (opened_serial != worker->serial_number) {
+      throw std::runtime_error(
+          "ZED source on port " +
+          std::to_string(streamPortForConfig(config)) + " reports serial " +
+          std::to_string(opened_serial) + ", expected " +
+          std::to_string(worker->serial_number));
+    }
+
+    configurePerCameraBodyPublishing(*worker);
+    configureImagePublishing(*worker);
+    configureOverlayPublishing(*worker);
 
     sl::PositionalTrackingParameters tracking_params;
     tracking_params.set_as_static = set_as_static_;

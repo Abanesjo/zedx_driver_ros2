@@ -1,9 +1,35 @@
 # zedx_driver_ros2
 
-This repository allows bringup and body tracking of a ZEDX Camera. The cameras are attached to a ZED Box and the primary compute is on a more powerful networked computer. 
+This repository provides bringup and fused body tracking for three ZED X cameras. The cameras are attached to a ZED Box, while the primary compute runs on a more powerful networked computer.
 
 ## Usage
 The instructions assume you will be splitting compute between the ZED Box and a networked workstation computer with an RTX GPU
+
+The default camera-to-stream mapping matches `src/zed_launcher/calibration/calibration.json`:
+
+| Camera | Serial number | Stream port |
+| --- | ---: | ---: |
+| `zed_left` | `41235597` | `30000` |
+| `zed_center` | `46229474` | `30004` |
+| `zed_right` | `49967328` | `30002` |
+
+The server binds each camera by serial number, so USB device enumeration does not affect this mapping.
+
+`body_tracking.launch.xml` enables three-camera AprilTag fusion by default. It
+rejects stale or inconsistent detections, fuses the largest agreeing camera set
+using reprojection quality, and falls back to the best single detection.
+
+The resulting frame ownership is:
+
+```text
+apriltag_0 -> fusion_world -> zed_{left,center,right}_left_camera_optical_frame
+```
+
+The AprilTag edge is dynamic; the three camera edges come from
+`calibration.json` and are static. Skeletons and colliders remain message data
+with `header.frame_id=fusion_world`; no joint TF tree is generated. If the robot
+also needs `pelvis -> apriltag_0`, publish that known mounting transform
+separately with a static TF publisher.
 
 ### ZED Box Setup
 On the ZED Box: 
