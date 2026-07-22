@@ -28,7 +28,7 @@ using JointState = sensor_msgs::msg::JointState;
 using Object = zed_msgs::msg::Object;
 using ObjectsStamped = zed_msgs::msg::ObjectsStamped;
 
-inline constexpr std::size_t kNumJoints = 8;
+inline constexpr std::size_t kNumJoints = 11;
 inline constexpr std::size_t kNumBody38Points = 38;
 inline constexpr double kPi = 3.14159265358979323846;
 
@@ -46,6 +46,37 @@ inline constexpr int kLeftKnee = 20;
 inline constexpr int kRightKnee = 21;
 inline constexpr int kLeftAnkle = 22;
 inline constexpr int kRightAnkle = 23;
+
+enum class JointIndex : std::size_t {
+  WaistYaw = 0,
+  WaistRoll,
+  WaistPitch,
+  LeftShoulderPitch,
+  LeftShoulderRoll,
+  LeftShoulderYaw,
+  LeftElbow,
+  RightShoulderPitch,
+  RightShoulderRoll,
+  RightShoulderYaw,
+  RightElbow,
+};
+
+inline constexpr std::size_t jointIndex(JointIndex index) {
+  return static_cast<std::size_t>(index);
+}
+
+using BodyPoints = std::array<std::optional<Vec3>, kNumBody38Points>;
+
+struct JointAngles {
+  std::array<double, kNumJoints> values{};
+  std::array<bool, kNumJoints> valid{};
+};
+
+bool isCircularJoint(std::size_t index);
+
+double wrapAngle(double angle);
+
+JointAngles estimateJointAngles(const BodyPoints &points);
 
 class EMAJumpFilter {
 public:
@@ -66,8 +97,7 @@ class AngleFilter {
 public:
   AngleFilter(double alpha, double max_rate_deg);
 
-  std::array<double, kNumJoints>
-  update(const std::array<double, kNumJoints> &values, double dt);
+  JointAngles update(const JointAngles &angles, double dt);
 
 private:
   double alpha_;
@@ -77,13 +107,16 @@ private:
   std::array<bool, kNumJoints> has_ema_;
   std::array<bool, kNumJoints> has_prev_;
   const std::array<std::pair<double, double>, kNumJoints> limits_ = {
+      std::pair<double, double>{-kPi, kPi},
       std::pair<double, double>{-60.0 * kPi / 180.0, 60.0 * kPi / 180.0},
       std::pair<double, double>{-60.0 * kPi / 180.0, 60.0 * kPi / 180.0},
       std::pair<double, double>{-180.0 * kPi / 180.0, 180.0 * kPi / 180.0},
       std::pair<double, double>{-90.0 * kPi / 180.0, 150.0 * kPi / 180.0},
+      std::pair<double, double>{-kPi, kPi},
       std::pair<double, double>{0.0, 180.0 * kPi / 180.0},
       std::pair<double, double>{-180.0 * kPi / 180.0, 180.0 * kPi / 180.0},
       std::pair<double, double>{-90.0 * kPi / 180.0, 150.0 * kPi / 180.0},
+      std::pair<double, double>{-kPi, kPi},
       std::pair<double, double>{0.0, 180.0 * kPi / 180.0}};
 };
 
@@ -93,6 +126,21 @@ struct CapsuleData {
   Vec3 b;
   double radius = 0.0;
 };
+
+struct BodyCapsuleConfig {
+  double radius_scale = 1.5;
+  double torso_radius = 0.10;
+  double shoulder_radius = 0.05;
+  double arm_radius = 0.05;
+  double thigh_radius = 0.065;
+  double shin_radius = 0.065;
+};
+
+std::vector<CapsuleData> buildBodyCapsules(const BodyPoints &points,
+                                           const BodyCapsuleConfig &config);
+
+bool hasUsableObservation(const JointAngles &angles,
+                          const std::vector<CapsuleData> &capsules);
 
 struct MappingResult {
   Time stamp;
@@ -114,25 +162,14 @@ private:
 
   void warnBodyFormat(int body_format);
 
-  std::array<std::optional<Vec3>, kNumBody38Points>
-  filteredPoints(const Object &obj);
-
-  std::optional<std::array<double, kNumJoints>> estimateAngles(
-      const std::array<std::optional<Vec3>, kNumBody38Points> &points);
-
-  double minAbs(double a, double b, double c) const;
+  BodyPoints filteredPoints(const Object &obj);
 
   double angleDt(int64_t now_ns);
 
-  std::array<double, kNumJoints>
-  neutralDelta(const std::array<double, kNumJoints> &angles, int64_t now_ns);
+  std::array<double, kNumJoints> neutralDelta(const JointAngles &angles,
+                                              int64_t now_ns);
 
-  std::array<double, kNumJoints>
-  subtract(const std::array<double, kNumJoints> &a,
-           const std::array<double, kNumJoints> &b) const;
-
-  std::vector<CapsuleData> buildCapsules(
-      const std::array<std::optional<Vec3>, kNumBody38Points> &points);
+  std::vector<CapsuleData> buildCapsules(const BodyPoints &points);
 
   void timerCallback();
 
@@ -162,7 +199,7 @@ private:
 
   std::string fallback_frame_id_;
 
-  double publish_rate_hz_ = 50.0;
+  double publish_rate_hz_ = 30.0;
 
   double stale_timeout_sec_ = 0.5;
 
@@ -180,9 +217,21 @@ private:
 
   std::optional<int64_t> calibration_start_ns_;
 
-  std::vector<std::array<double, kNumJoints>> calibration_samples_;
+  std::array<double, kNumJoints> calibration_linear_sum_{};
+
+  std::array<double, kNumJoints> calibration_sin_sum_{};
+
+  std::array<double, kNumJoints> calibration_cos_sum_{};
+
+  std::array<std::size_t, kNumJoints> calibration_sample_count_{};
 
   std::array<double, kNumJoints> neutral_offset_{};
+
+  std::array<bool, kNumJoints> neutral_initialized_{};
+
+  std::array<double, kNumJoints> last_delta_{};
+
+  std::array<bool, kNumJoints> has_last_delta_{};
 
   bool calibration_done_ = false;
 

@@ -1,7 +1,7 @@
 <launch>
   <arg name="input_skeleton_topic" default="/zed_fusion/body_trk/skeletons"/>
   <arg name="publish_rate_hz" default="30.0"/>
-  <arg name="joint_command_topic" default="/upper_body_targets_unsafe"/>
+  <arg name="joint_command_topic" default="/human/joint_commands"/>
   <arg name="body_collider_topic" default="/human/body_colliders"/>
   <arg name="collider_topic" default="/human/colliders"/>
   <arg name="enable_hand_mapping" default="true"/>

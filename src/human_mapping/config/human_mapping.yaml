@@ -1,7 +1,7 @@
 human_mapping_node:
   ros__parameters:
     input_skeleton_topic: "/zed_fusion/body_trk/skeletons"
-    joint_command_topic: "/upper_body_targets_unsafe"
+    joint_command_topic: "/human/joint_commands"
     collider_topic: "/human/body_colliders"
     fallback_frame_id: "fusion_world"
 
@@ -21,20 +21,23 @@ human_mapping_node:
     neutral_calibration_duration: 10.0
 
     joint_names:
+      - waist_yaw_joint
       - waist_roll_joint
       - waist_pitch_joint
       - left_shoulder_pitch_joint
       - left_shoulder_roll_joint
+      - left_shoulder_yaw_joint
       - left_elbow_joint
       - right_shoulder_pitch_joint
       - right_shoulder_roll_joint
+      - right_shoulder_yaw_joint
       - right_elbow_joint
-    q_home: [0.0, 0.0, 0.0, 0.0, 1.5708, 0.0, 0.0, 1.5708]
-    signs: [-1.0, 1.0, -1.0, 1.0, -1.0, -1.0, -1.0, -1.0]
-    gains: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
-    bias: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
-    q_min: [-0.52, -0.52, -3.0892, -1.5882, -1.0472, -3.0892, -2.2515, -1.0472]
-    q_max: [0.52, 0.52, 2.6704, 2.2515, 2.0944, 2.6704, 1.5882, 2.0944]
+    q_home: [0.0, 0.0, 0.0, 0.35, 0.18, 0.0, 0.87, 0.35, -0.18, 0.0, 0.87]
+    signs: [1.0, -1.0, 1.0, -1.0, 1.0, 1.0, -1.0, -1.0, -1.0, 1.0, -1.0]
+    gains: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+    bias: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    q_min: [-2.094, -0.416, -0.416, -2.471, -1.271, -2.094, -0.838, -2.471, -1.801, -2.094, -0.838]
+    q_max: [2.094, 0.416, 0.416, 2.136, 1.801, 2.094, 1.676, 2.136, 1.271, 2.094, 1.676]
 
     human_radius_scale: 1.5
     torso_radius: 0.10

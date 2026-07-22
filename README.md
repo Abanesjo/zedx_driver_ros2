@@ -89,6 +89,12 @@ docker exec -it zedx_driver_ros2 bash
 ros2 launch human_mapping human_mapping.launch.xml
 ```
 
+This launch publishes the tracked G1 upper-body joint commands on
+`/human/joint_commands` and the tracked body/hand capsules on
+`/human/colliders`. It replaces the role of `g1_human_manual.launch.xml` for
+live tracking; do not run both launches at the same time because they publish
+the same topics.
+
 You should see a visualization like below
 
 ![rviz](docs/rviz.png)

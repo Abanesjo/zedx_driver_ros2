@@ -94,4 +94,24 @@ install(
   DESTINATION include
 )
 
+if(BUILD_TESTING)
+  find_package(ament_cmake_gtest REQUIRED)
+
+  ament_add_gtest(test_human_mapping
+    test/test_human_mapping.cpp
+    src/human_mapping.cpp
+  )
+  target_include_directories(test_human_mapping PRIVATE
+    include
+  )
+  ament_target_dependencies(test_human_mapping
+    builtin_interfaces
+    geometry_msgs
+    g1_cbf_msg
+    rclcpp
+    sensor_msgs
+    zed_msgs
+  )
+endif()
+
 ament_package()
