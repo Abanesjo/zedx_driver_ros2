@@ -43,6 +43,36 @@ cv::Mat cvOpticalToZedXForwardRotation() {
 
 } // namespace
 
+ApriltagFusionNode::ArucoDetectorAdapter::ArucoDetectorAdapter(
+    int dictionary_id, bool corner_refinement)
+#if ZED_LAUNCHER_USE_MODERN_ARUCO
+    : detector_(cv::aruco::getPredefinedDictionary(dictionary_id)) {
+  auto detector_parameters = detector_.getDetectorParameters();
+  detector_parameters.cornerRefinementMethod =
+      corner_refinement ? cv::aruco::CORNER_REFINE_SUBPIX
+                        : cv::aruco::CORNER_REFINE_NONE;
+  detector_.setDetectorParameters(detector_parameters);
+#else
+    : dictionary_(cv::aruco::getPredefinedDictionary(dictionary_id)),
+      detector_parameters_(cv::aruco::DetectorParameters::create()) {
+  detector_parameters_->cornerRefinementMethod =
+      corner_refinement ? cv::aruco::CORNER_REFINE_SUBPIX
+                        : cv::aruco::CORNER_REFINE_NONE;
+#endif
+}
+
+void ApriltagFusionNode::ArucoDetectorAdapter::detectMarkers(
+    const cv::Mat &image,
+    std::vector<std::vector<cv::Point2f>> &corners,
+    std::vector<int> &ids) const {
+#if ZED_LAUNCHER_USE_MODERN_ARUCO
+  detector_.detectMarkers(image, corners, ids);
+#else
+  cv::aruco::detectMarkers(image, dictionary_, corners, ids,
+                           detector_parameters_);
+#endif
+}
+
 ApriltagFusionNode::ApriltagFusionNode(const rclcpp::NodeOptions &options)
     : Node("apriltag_fusion_node", options), tf_buffer_(get_clock()),
       tf_listener_(tf_buffer_) {
@@ -166,8 +196,7 @@ ApriltagFusionNode::ApriltagFusionNode(const rclcpp::NodeOptions &options)
   }
 
   camera_frame_convention_ = parseCameraFrameConvention(frame_convention);
-  dictionary_ =
-      cv::aruco::getPredefinedDictionary(parseDictionary(dictionary_name));
+  const int dictionary_id = parseDictionary(dictionary_name);
 
   if (publish_fusion_pose_) {
     pose_pub_ =
@@ -186,10 +215,8 @@ ApriltagFusionNode::ApriltagFusionNode(const rclcpp::NodeOptions &options)
         "/" + camera->name + "/zed_node/rgb/color/rect/image";
     camera->camera_info_topic =
         "/" + camera->name + "/zed_node/rgb/color/rect/camera_info";
-    camera->detector_params = cv::aruco::DetectorParameters::create();
-    camera->detector_params->cornerRefinementMethod =
-        corner_refinement_ ? cv::aruco::CORNER_REFINE_SUBPIX
-                           : cv::aruco::CORNER_REFINE_NONE;
+    camera->detector = std::make_unique<ArucoDetectorAdapter>(
+        dictionary_id, corner_refinement_);
     camera->callback_group =
         create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
 
@@ -270,8 +297,7 @@ void ApriltagFusionNode::handleImage(
   std::vector<int> ids;
   std::vector<std::vector<cv::Point2f>> corners;
   try {
-    cv::aruco::detectMarkers(gray, dictionary_, corners, ids,
-                             camera.detector_params);
+    camera.detector->detectMarkers(gray, corners, ids);
   } catch (const cv::Exception &ex) {
     RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
                          "AprilTag detection failed on %s: %s",
@@ -875,8 +901,7 @@ geometry_msgs::msg::Transform ApriltagFusionNode::transformMsgFromTransform(
   return msg;
 }
 
-cv::aruco::PREDEFINED_DICTIONARY_NAME
-ApriltagFusionNode::parseDictionary(const std::string &dictionary) const {
+int ApriltagFusionNode::parseDictionary(const std::string &dictionary) const {
   const auto normalized = upper(dictionary);
   if (normalized == "APRILTAG_16H5" ||
       normalized == "DICT_APRILTAG_16H5") {

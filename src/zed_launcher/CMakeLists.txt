@@ -3,6 +3,24 @@ project(zed_launcher)
 
 find_package(ament_cmake REQUIRED)
 find_package(OpenCV REQUIRED)
+if(OpenCV_VERSION VERSION_LESS "4.7.0")
+  set(ZED_LAUNCHER_ARUCO_COMPONENT aruco)
+  set(ZED_LAUNCHER_ARUCO_TARGET opencv_aruco)
+  set(ZED_LAUNCHER_ARUCO_API "legacy aruco module")
+else()
+  set(ZED_LAUNCHER_ARUCO_COMPONENT objdetect)
+  set(ZED_LAUNCHER_ARUCO_TARGET opencv_objdetect)
+  set(ZED_LAUNCHER_ARUCO_API "objdetect ArucoDetector")
+endif()
+find_package(OpenCV REQUIRED COMPONENTS
+  core
+  imgproc
+  calib3d
+  ${ZED_LAUNCHER_ARUCO_COMPONENT}
+)
+message(STATUS
+  "zed_launcher: OpenCV ${OpenCV_VERSION}, using ${ZED_LAUNCHER_ARUCO_API}"
+)
 find_package(geometry_msgs REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(sensor_msgs REQUIRED)
@@ -95,7 +113,10 @@ target_include_directories(apriltag_fusion_node PRIVATE
 )
 
 target_link_libraries(apriltag_fusion_node
-  ${OpenCV_LIBRARIES}
+  opencv_core
+  opencv_imgproc
+  opencv_calib3d
+  ${ZED_LAUNCHER_ARUCO_TARGET}
 )
 
 ament_target_dependencies(apriltag_fusion_node

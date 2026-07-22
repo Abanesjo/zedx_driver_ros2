@@ -11,8 +11,16 @@
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <geometry_msgs/msg/transform.hpp>
 #include <geometry_msgs/msg/transform_stamped.hpp>
-#include <opencv2/aruco.hpp>
 #include <opencv2/core.hpp>
+#include <opencv2/core/version.hpp>
+#if CV_VERSION_MAJOR > 4 ||                                                \
+    (CV_VERSION_MAJOR == 4 && CV_VERSION_MINOR >= 7)
+#define ZED_LAUNCHER_USE_MODERN_ARUCO 1
+#include <opencv2/objdetect/aruco_detector.hpp>
+#else
+#define ZED_LAUNCHER_USE_MODERN_ARUCO 0
+#include <opencv2/aruco.hpp>
+#endif
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/camera_info.hpp>
 #include <sensor_msgs/msg/image.hpp>
@@ -30,6 +38,24 @@ public:
 
 private:
   enum class CameraFrameConvention { RosOptical, ZedXForward };
+
+  class ArucoDetectorAdapter {
+  public:
+    ArucoDetectorAdapter(int dictionary_id, bool corner_refinement);
+
+    void detectMarkers(
+        const cv::Mat &image,
+        std::vector<std::vector<cv::Point2f>> &corners,
+        std::vector<int> &ids) const;
+
+  private:
+#if ZED_LAUNCHER_USE_MODERN_ARUCO
+    cv::aruco::ArucoDetector detector_;
+#else
+    cv::Ptr<cv::aruco::Dictionary> dictionary_;
+    cv::Ptr<cv::aruco::DetectorParameters> detector_parameters_;
+#endif
+  };
 
   struct Observation {
     tf2::Transform fusion_from_tag;
@@ -50,7 +76,7 @@ private:
     std::string name;
     std::string image_topic;
     std::string camera_info_topic;
-    cv::Ptr<cv::aruco::DetectorParameters> detector_params;
+    std::unique_ptr<ArucoDetectorAdapter> detector;
     rclcpp::CallbackGroup::SharedPtr callback_group;
     rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr image_sub;
     rclcpp::Subscription<sensor_msgs::msg::CameraInfo>::SharedPtr
@@ -113,8 +139,7 @@ private:
   geometry_msgs::msg::Transform transformMsgFromTransform(
       const tf2::Transform &transform) const;
 
-  cv::aruco::PREDEFINED_DICTIONARY_NAME
-  parseDictionary(const std::string &dictionary) const;
+  int parseDictionary(const std::string &dictionary) const;
 
   CameraFrameConvention
   parseCameraFrameConvention(const std::string &convention) const;
@@ -143,7 +168,6 @@ private:
 
   CameraFrameConvention camera_frame_convention_ =
       CameraFrameConvention::ZedXForward;
-  cv::Ptr<cv::aruco::Dictionary> dictionary_;
 
   rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr pose_pub_;
   std::vector<std::unique_ptr<CameraContext>> cameras_;
