@@ -53,9 +53,9 @@ def test_continuity_and_apriltag_defaults_and_parameter_plumbing():
     }
 
     expected_defaults = {
-        "camera_resolution": "SVGA",
-        "camera_fps": "60",
-        "fusion_publish_rate_hz": "60.0",
+        "camera_resolution": "HD1080",
+        "camera_fps": "30",
+        "fusion_publish_rate_hz": "30.0",
         "fusion_diagnostics_rate_hz": "1.0",
         "body_model": "HUMAN_BODY_FAST",
         "single_body_switch_frames": "60",
@@ -170,16 +170,16 @@ def test_continuity_and_apriltag_defaults_and_parameter_plumbing():
     assert "apriltag_tag_separation_max_innovation_m" in arguments
 
 
-def test_server_stream_defaults_match_continuity_profile():
+def test_server_stream_defaults_match_default_profile():
     launch = ET.parse(SERVER_LAUNCH_PATH).getroot()
     arguments = {
         arg.attrib["name"]: arg.attrib.get("default")
         for arg in launch.findall("arg")
     }
 
-    assert arguments["camera_resolution"] == "SVGA"
-    assert arguments["grab_frame_rate"] == "60"
-    assert arguments["stream_target_framerate"] == "60"
+    assert arguments["camera_resolution"] == "HD1080"
+    assert arguments["grab_frame_rate"] == "30"
+    assert arguments["stream_target_framerate"] == "30"
 
     camera_includes = launch.findall("include")
     assert len(camera_includes) == 3

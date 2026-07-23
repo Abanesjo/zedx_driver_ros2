@@ -136,8 +136,8 @@ Filter tuning is exposed through
 `apriltag_kalman_initial_yaw_rate_std_degps` (90 degrees/s), and
 `apriltag_kalman_reset_sec` (0.5 s).
 
-The default continuity profile uses `SVGA` at 60 FPS, `HUMAN_BODY_FAST`,
-`NEURAL_LIGHT`, full Fusion skeleton smoothing, and a 60 Hz Fusion loop. A
+The default profile uses `HD1080` at 30 FPS, `HUMAN_BODY_FAST`,
+`NEURAL_LIGHT`, full Fusion skeleton smoothing, and a 30 Hz Fusion loop. A
 body is admitted when at least one camera tracks it, allowing the fused
 skeleton to continue through areas seen by only one camera. SDK prediction is
 kept for 0.4 seconds (`body_prediction_timeout_sec`) through brief detection
@@ -146,10 +146,9 @@ stronger evidence before switching subjects.
 
 AprilTag detection is limited to 20 Hz and runs independently from camera
 capture with only the newest pending frame retained per camera. This prevents
-tag processing from building latency or delaying the 60 Hz grab loop. The
-higher-resolution profile remains available explicitly with
-`camera_resolution:=HD1080 camera_fps:=30 depth_mode:=NEURAL_PLUS`, but its
-lower frame rate favors spatial detail over skeleton continuity.
+tag processing from building latency or delaying the camera grab loop.
+`camera_resolution:=SVGA camera_fps:=60` remains available explicitly, but it
+is not the default three-camera streaming profile.
 
 Fusion health is published once per second on `/zed_fusion/diagnostics`.
 It reports the stream mode and local grab rate, Fusion sender timing and
@@ -189,8 +188,8 @@ docker compose up
 docker exec -it zedx_driver_ros2 bash
 ros2 launch zed_launcher server.launch.xml
 ```
-The default server profile streams all three cameras as SVGA60 at a target
-rate of 60 FPS. Restart the remote server after updating this workspace:
+The default server profile streams all three cameras as HD1080 at a target
+rate of 30 FPS. Restart the remote server after updating this workspace:
 an already-running ZED stream keeps its existing resolution and frame rate,
 and the client cannot renegotiate them.
 6. (Optional) You can run body tracking directly on the ZED Box

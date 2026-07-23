@@ -235,7 +235,7 @@ private:
 
   sl::DEPTH_MODE depth_mode_ = sl::DEPTH_MODE::NEURAL_LIGHT;
 
-  sl::RESOLUTION camera_resolution_ = sl::RESOLUTION::SVGA;
+  sl::RESOLUTION camera_resolution_ = sl::RESOLUTION::HD1080;
 
   sl::FUSION_REFERENCE_FRAME fusion_reference_frame_ =
       sl::FUSION_REFERENCE_FRAME::BASELINK;
@@ -258,7 +258,7 @@ private:
 
   int fusion_minimum_allowed_keypoints_ = 7;
 
-  int camera_fps_ = 60;
+  int camera_fps_ = 30;
 
   int sdk_gpu_id_ = -1;
 
@@ -270,7 +270,7 @@ private:
 
   int candidate_switch_count_ = 0;
 
-  double fusion_publish_rate_hz_ = 60.0;
+  double fusion_publish_rate_hz_ = 30.0;
 
   double fusion_diagnostics_rate_hz_ = 1.0;
 

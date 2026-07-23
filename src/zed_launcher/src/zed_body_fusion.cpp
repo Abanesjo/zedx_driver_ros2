@@ -393,7 +393,7 @@ void ZedBodyFusionNode::loadParameters() {
   depth_mode_ = parseDepthMode(
       declare_parameter<std::string>("depth_mode", "NEURAL_LIGHT"));
   camera_resolution_ = parseResolution(
-      declare_parameter<std::string>("camera_resolution", "SVGA"));
+      declare_parameter<std::string>("camera_resolution", "HD1080"));
   fusion_reference_frame_ = parseFusionReferenceFrame(
       declare_parameter<std::string>("fusion_reference_frame", "BASELINK"));
 
@@ -407,10 +407,10 @@ void ZedBodyFusionNode::loadParameters() {
       declare_parameter<int>("fusion_minimum_allowed_cameras", 1);
   fusion_minimum_allowed_keypoints_ =
       declare_parameter<int>("fusion_minimum_allowed_keypoints", 7);
-  camera_fps_ = declare_parameter<int>("camera_fps", 60);
+  camera_fps_ = declare_parameter<int>("camera_fps", 30);
   sdk_gpu_id_ = declare_parameter<int>("sdk_gpu_id", -1);
   fusion_publish_rate_hz_ =
-      declare_parameter<double>("fusion_publish_rate_hz", 60.0);
+      declare_parameter<double>("fusion_publish_rate_hz", 30.0);
   fusion_diagnostics_rate_hz_ =
       declare_parameter<double>("fusion_diagnostics_rate_hz", 1.0);
   body_prediction_timeout_sec_ =
