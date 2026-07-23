@@ -59,7 +59,8 @@ def test_continuity_and_apriltag_defaults_and_parameter_plumbing():
         "fusion_diagnostics_rate_hz": "1.0",
         "body_model": "HUMAN_BODY_ACCURATE",
         "body_format": "BODY_18",
-        "confidence_threshold": "40.0",
+        "confidence_threshold": "65.0",
+        "overlay_min_confidence": "$(var confidence_threshold)",
         "single_body_switch_frames": "30",
         "single_body_logical_id": "0",
         "single_body_bridge_timeout_sec": "0.5",
@@ -113,6 +114,7 @@ def test_continuity_and_apriltag_defaults_and_parameter_plumbing():
         "body_model": "body_model",
         "body_format": "body_format",
         "confidence_threshold": "confidence_threshold",
+        "overlay_min_confidence": "overlay_min_confidence",
         "single_body_switch_frames": "single_body_switch_frames",
         "single_body_logical_id": "single_body_logical_id",
         "single_body_bridge_timeout_sec":

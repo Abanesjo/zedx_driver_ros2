@@ -25,8 +25,12 @@
   <arg name="body_model" default="HUMAN_BODY_ACCURATE" />
   <!-- Options: BODY_18, BODY_34, BODY_38 -->
   <arg name="body_format" default="BODY_18" />
-  <!-- confidence threshold for body tracking -->
-  <arg name="confidence_threshold" default="40.0" />
+  <!--
+    Confidence threshold for body tracking. Live human/robot testing selected
+    65 as the lowest value with a useful margin above the humanoid false
+    positives while preserving reliable multi-camera human detections.
+  -->
+  <arg name="confidence_threshold" default="65.0" />
   <!-- to publish only one skeleton -->
   <arg name="single_body_enabled" default="true" />
   <!-- when switching from one skeleton to another, the confidence difference must be greater than the margin -->

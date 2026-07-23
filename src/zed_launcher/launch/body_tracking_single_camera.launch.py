@@ -180,7 +180,7 @@ def generate_launch_description():
             ),
             DeclareLaunchArgument(
                 "confidence_threshold",
-                default_value="40.0",
+                default_value="65.0",
                 description="Minimum SDK body detection confidence",
             ),
             DeclareLaunchArgument(

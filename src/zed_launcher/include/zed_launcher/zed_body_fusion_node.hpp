@@ -252,9 +252,9 @@ private:
 
   sl::BodyTrackingFusionRuntimeParameters fusion_runtime_params_;
 
-  double confidence_threshold_ = 40.0;
+  double confidence_threshold_ = 65.0;
 
-  double overlay_min_confidence_ = 40.0;
+  double overlay_min_confidence_ = 65.0;
 
   double overlay_max_skeleton_age_sec_ = 0.5;
 

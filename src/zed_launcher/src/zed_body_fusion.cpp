@@ -1,6 +1,7 @@
 #include "zed_launcher/zed_body_fusion_node.hpp"
 
 #include "zed_launcher/body_format_utils.hpp"
+#include "zed_launcher/body_tracking_utils.hpp"
 #include "zed_launcher/camera_body_consensus.hpp"
 #include "zed_launcher/skeleton_draw_utils.hpp"
 
@@ -401,7 +402,7 @@ void ZedBodyFusionNode::loadParameters() {
       declare_parameter<std::string>("fusion_reference_frame", "BASELINK"));
 
   confidence_threshold_ =
-      declare_parameter<double>("confidence_threshold", 40.0);
+      declare_parameter<double>("confidence_threshold", 65.0);
   single_body_switch_margin_ =
       declare_parameter<double>("single_body_switch_margin", 10.0);
   fusion_skeleton_smoothing_ =
@@ -1251,6 +1252,13 @@ void ZedBodyFusionNode::drawSkeletonOverlay(
                     static_cast<int>(image_msg.width), CV_8UC3,
                     image_msg.data.data(), image_msg.step);
       for (const auto &body : worker.overlay_bodies.body_list) {
+        // SEARCHING and TERMINATE are retained SDK tracks, not current camera
+        // measurements. Drawing them makes a stale false positive appear to
+        // persist even though it is already excluded from fused output.
+        if (!isMeasuredBodyTrackingState(body.tracking_state,
+                                         sender_tracking_enabled_)) {
+          continue;
+        }
         drawOverlayBody(image, body, body_format);
       }
     }
@@ -1856,19 +1864,8 @@ bool ZedBodyFusionNode::bodyPassesRosFilter(const sl::BodyData &body) const {
 
 bool ZedBodyFusionNode::bodyPassesMeasuredFilter(
     const sl::BodyData &body, bool tracking_available) const {
-  if (!bodyPassesRosFilter(body)) {
-    return false;
-  }
-
-  // With tracking enabled, OK is the only state suitable for refreshing the
-  // continuity model. SEARCHING/TERMINATE are SDK predictions or stale tracks,
-  // and OFF means tracking has not initialized. When sender tracking is
-  // intentionally disabled, OFF is the normal measured-detection state.
-  if (tracking_available) {
-    return body.tracking_state == sl::OBJECT_TRACKING_STATE::OK;
-  }
-  return body.tracking_state == sl::OBJECT_TRACKING_STATE::OFF ||
-         body.tracking_state == sl::OBJECT_TRACKING_STATE::OK;
+  return bodyPassesRosFilter(body) &&
+         isMeasuredBodyTrackingState(body.tracking_state, tracking_available);
 }
 
 int ZedBodyFusionNode::bestConfidenceIndex(
