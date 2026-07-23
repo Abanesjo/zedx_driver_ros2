@@ -105,6 +105,7 @@ private:
     double depth_pnp_translation_delta_m = 0.0;
     double depth_pnp_rotation_delta_deg = 0.0;
     double depth_blend_weight = 0.0;
+    double depth_rotation_blend_weight = 0.0;
     double estimator_weight = 1.0;
   };
 
@@ -115,6 +116,19 @@ private:
     std::size_t inlier_samples = 0;
     double valid_fraction = 0.0;
     double rmse_m = 0.0;
+  };
+
+  struct TimedPoseEstimate {
+    PoseEstimate estimate;
+    rclcpp::Time receipt_time;
+  };
+
+  struct KalmanAxisState {
+    double position = 0.0;
+    double velocity = 0.0;
+    double position_variance = 0.0;
+    double position_velocity_covariance = 0.0;
+    double velocity_variance = 0.0;
   };
 
   struct CameraContext {
@@ -130,6 +144,8 @@ private:
     rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr debug_pub;
     sensor_msgs::msg::CameraInfo::SharedPtr latest_camera_info;
     std::array<std::optional<Observation>, kTagCount> latest_observations;
+    std::array<std::optional<TimedPoseEstimate>, kTagCount>
+        latest_pose_estimates;
     rclcpp::Time last_detection_attempt_time;
     bool has_last_detection_attempt_time = false;
     std::mutex mutex;
@@ -166,8 +182,12 @@ private:
   tf2::Transform
   tagFrameFromBothTags(const tf2::Transform &fusion_from_front_tag,
                        const tf2::Transform &fusion_from_back_tag,
-                       double front_quality = 1.0,
-                       double back_quality = 1.0) const;
+                       double front_quality = 1.0, double back_quality = 1.0,
+                       double baseline_orientation_weight = 0.0) const;
+
+  static tf2::Quaternion blendTagNormal(const tf2::Quaternion &pnp_rotation,
+                                        const tf2::Quaternion &depth_rotation,
+                                        double depth_weight);
 
   void updateTagTransform(const FusedTagEstimate &front,
                           const FusedTagEstimate &back);
@@ -182,8 +202,22 @@ private:
 
   std::optional<size_t> selectFallbackTagSlot() const;
 
-  tf2::Transform smoothTransform(const tf2::Transform &fusion_from_tag_frame,
-                                 const rclcpp::Time &receipt_time);
+  tf2::Transform
+  filterTransform(const tf2::Transform &fusion_from_tag_frame_measurement,
+                  const rclcpp::Time &filter_time);
+
+  tf2::Transform kalmanFilteredTransform() const;
+
+  static std::optional<double> constrainedYaw(const tf2::Quaternion &rotation,
+                                              bool allow_axis_fallback);
+
+  static tf2::Quaternion constrainedRotation(double yaw);
+
+  static void predictKalmanAxis(KalmanAxisState &state, double delta_sec,
+                                double acceleration_std);
+
+  static void correctKalmanAxis(KalmanAxisState &state, double measurement,
+                                double measurement_std, bool wrap_innovation);
 
   void publishResult(const tf2::Transform &fusion_from_tag_frame,
                      const rclcpp::Time &stamp);
@@ -213,12 +247,19 @@ private:
       const std::vector<cv::Point2f> &corners, const cv::Mat &camera_matrix,
       const cv::Mat &distortion_coeffs, double tag_size_m,
       const DepthFrameView *depth_frame, std::size_t image_width,
-      std::size_t image_height) const;
+      std::size_t image_height, const PoseEstimate *pnp_prior = nullptr) const;
 
   std::optional<PoseEstimate>
   estimateTagWithPnp(const std::vector<cv::Point2f> &corners,
                      const cv::Mat &camera_matrix,
-                     const cv::Mat &distortion_coeffs, double tag_size_m) const;
+                     const cv::Mat &distortion_coeffs, double tag_size_m,
+                     const PoseEstimate *pnp_prior = nullptr) const;
+
+  static std::optional<std::size_t>
+  selectPnpCandidate(const std::vector<cv::Mat> &candidate_rvecs,
+                     const std::vector<double> &candidate_squared_errors,
+                     const cv::Mat *prior_rvec, double ambiguity_margin_px,
+                     std::size_t corner_count);
 
   std::optional<PoseEstimate> estimateTagWithDepth(
       const std::vector<cv::Point2f> &corners, const cv::Mat &camera_matrix,
@@ -276,6 +317,8 @@ private:
   double depth_max_pnp_translation_delta_m_ = 0.20;
   double depth_max_pnp_rotation_delta_deg_ = 20.0;
   double depth_max_size_error_fraction_ = 0.25;
+  double pnp_ambiguity_reprojection_margin_px_ = 0.25;
+  double pnp_prior_max_age_sec_ = 0.25;
   bool learn_tag_transform_ = true;
   double tag_transform_bootstrap_duration_sec_ = 2.5;
   int tag_transform_bootstrap_min_samples_ = 30;
@@ -285,6 +328,7 @@ private:
   double tag_transform_online_alpha_ = 0.01;
   double tag_transform_max_translation_step_m_ = 0.002;
   double tag_transform_max_rotation_step_deg_ = 0.25;
+  double tag_pair_baseline_orientation_weight_ = 0.0;
   double max_detection_rate_hz_ = 30.0;
   double fusion_publish_rate_hz_ = 30.0;
   double tf_lookup_timeout_sec_ = 0.05;
@@ -299,8 +343,14 @@ private:
   double max_reprojection_rmse_px_ = 3.0;
   double max_translation_disagreement_m_ = 0.25;
   double max_rotation_disagreement_deg_ = 25.0;
-  double smoothing_time_constant_sec_ = 0.10;
-  double smoothing_reset_sec_ = 0.50;
+  double fixed_tag_frame_z_m_ = 1.0;
+  double kalman_position_measurement_std_m_ = 0.010;
+  double kalman_yaw_measurement_std_deg_ = 1.5;
+  double kalman_linear_acceleration_std_mps2_ = 1.0;
+  double kalman_yaw_acceleration_std_degps2_ = 90.0;
+  double kalman_initial_linear_velocity_std_mps_ = 1.0;
+  double kalman_initial_yaw_rate_std_degps_ = 90.0;
+  double kalman_reset_sec_ = 0.50;
 
   CameraFrameConvention camera_frame_convention_ =
       CameraFrameConvention::ZedXForward;
@@ -325,9 +375,9 @@ private:
   rclcpp::Time tag_transform_bootstrap_start_time_;
   bool has_tag_transform_bootstrap_start_time_ = false;
   bool tag_transform_calibrated_ = false;
-  tf2::Transform smoothed_fusion_from_tag_frame_;
-  rclcpp::Time last_smoothed_receipt_time_;
-  bool has_smoothed_transform_ = false;
+  std::array<KalmanAxisState, 4> kalman_axes_;
+  rclcpp::Time last_kalman_filter_time_;
+  bool has_kalman_state_ = false;
 };
 
 } // namespace zed_launcher

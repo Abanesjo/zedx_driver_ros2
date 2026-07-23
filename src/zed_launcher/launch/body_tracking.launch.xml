@@ -21,11 +21,11 @@
     default="$(find-pkg-share zed_launcher)/calibration/calibration.json"
   />
   <!-- Options: HUMAN_BODY_FAST, HUMAN_BODY_MEDIUM, HUMAN_BODY_ACCURATE -->
-  <arg name="body_model" default="HUMAN_BODY_FAST" />
+  <arg name="body_model" default="HUMAN_BODY_MEDIUM" />
   <!-- Options: BODY_18, BODY_34, BODY_38 -->
   <arg name="body_format" default="BODY_38" />
   <!-- confidence threshold for body tracking -->
-  <arg name="confidence_threshold" default="70.0" />
+  <arg name="confidence_threshold" default="65.0" />
   <!-- to publish only one skeleton -->
   <arg name="single_body_enabled" default="true" />
   <!-- when switching from one skeleton to another, the confidence difference must be greater than the margin -->
@@ -75,6 +75,11 @@
     name="apriltag_depth_max_size_error_fraction"
     default="0.25"
   />
+  <arg
+    name="apriltag_pnp_ambiguity_reprojection_margin_px"
+    default="0.25"
+  />
+  <arg name="apriltag_pnp_prior_max_age_sec" default="0.25" />
   <arg name="apriltag_learn_tag_transform" default="true" />
   <arg
     name="apriltag_tag_transform_bootstrap_duration_sec"
@@ -105,6 +110,10 @@
     name="apriltag_tag_transform_max_rotation_step_deg"
     default="0.25"
   />
+  <arg
+    name="apriltag_tag_pair_baseline_orientation_weight"
+    default="0.0"
+  />
   <arg name="apriltag_debug_axis_length_m" default="0.06" />
   <arg name="apriltag_publish_fusion_pose" default="true" />
   <arg name="apriltag_publish_tf" default="true" />
@@ -116,15 +125,39 @@
   <arg name="apriltag_max_reprojection_rmse_px" default="3.0" />
   <arg name="apriltag_max_translation_disagreement_m" default="0.25" />
   <arg name="apriltag_max_rotation_disagreement_deg" default="25.0" />
-  <arg name="apriltag_smoothing_time_constant_sec" default="0.10" />
-  <arg name="apriltag_smoothing_reset_sec" default="0.5" />
+  <arg name="apriltag_fixed_tag_frame_z_m" default="1.0" />
+  <arg
+    name="apriltag_kalman_position_measurement_std_m"
+    default="0.010"
+  />
+  <arg
+    name="apriltag_kalman_yaw_measurement_std_deg"
+    default="1.5"
+  />
+  <arg
+    name="apriltag_kalman_linear_acceleration_std_mps2"
+    default="1.0"
+  />
+  <arg
+    name="apriltag_kalman_yaw_acceleration_std_degps2"
+    default="90.0"
+  />
+  <arg
+    name="apriltag_kalman_initial_linear_velocity_std_mps"
+    default="1.0"
+  />
+  <arg
+    name="apriltag_kalman_initial_yaw_rate_std_degps"
+    default="90.0"
+  />
+  <arg name="apriltag_kalman_reset_sec" default="0.5" />
   <arg name="apriltag_dictionary" default="APRILTAG_36h11" />
   <arg name="apriltag_corner_refinement" default="true" />
   <arg name="apriltag_camera_frame_convention" default="zed_x_forward" />
   <!-- Options: PERFORMANCE, QUALITY, ULTRA, NEURAL_LIGHT, NEURAL, NEURAL_PLUS -->
   <arg name="depth_mode" default="NEURAL_PLUS" />
   <arg name="fusion_reference_frame" default="WORLD" />
-  <arg name="fusion_skeleton_smoothing" default="1.0" />
+  <arg name="fusion_skeleton_smoothing" default="0.3" />
   <arg name="fusion_minimum_allowed_cameras" default="2" />
   <arg name="fusion_minimum_allowed_keypoints" default="7" />
   <arg name="sender_tracking_enabled" default="true"/>
@@ -249,6 +282,14 @@
       value="$(var apriltag_depth_max_size_error_fraction)"
     />
     <param
+      name="pnp_ambiguity_reprojection_margin_px"
+      value="$(var apriltag_pnp_ambiguity_reprojection_margin_px)"
+    />
+    <param
+      name="pnp_prior_max_age_sec"
+      value="$(var apriltag_pnp_prior_max_age_sec)"
+    />
+    <param
       name="learn_tag_transform"
       value="$(var apriltag_learn_tag_transform)"
     />
@@ -283,6 +324,10 @@
     <param
       name="tag_transform_max_rotation_step_deg"
       value="$(var apriltag_tag_transform_max_rotation_step_deg)"
+    />
+    <param
+      name="tag_pair_baseline_orientation_weight"
+      value="$(var apriltag_tag_pair_baseline_orientation_weight)"
     />
     <param
       name="publish_fusion_pose"
@@ -327,12 +372,36 @@
       value="$(var apriltag_max_rotation_disagreement_deg)"
     />
     <param
-      name="smoothing_time_constant_sec"
-      value="$(var apriltag_smoothing_time_constant_sec)"
+      name="fixed_tag_frame_z_m"
+      value="$(var apriltag_fixed_tag_frame_z_m)"
     />
     <param
-      name="smoothing_reset_sec"
-      value="$(var apriltag_smoothing_reset_sec)"
+      name="kalman_position_measurement_std_m"
+      value="$(var apriltag_kalman_position_measurement_std_m)"
+    />
+    <param
+      name="kalman_yaw_measurement_std_deg"
+      value="$(var apriltag_kalman_yaw_measurement_std_deg)"
+    />
+    <param
+      name="kalman_linear_acceleration_std_mps2"
+      value="$(var apriltag_kalman_linear_acceleration_std_mps2)"
+    />
+    <param
+      name="kalman_yaw_acceleration_std_degps2"
+      value="$(var apriltag_kalman_yaw_acceleration_std_degps2)"
+    />
+    <param
+      name="kalman_initial_linear_velocity_std_mps"
+      value="$(var apriltag_kalman_initial_linear_velocity_std_mps)"
+    />
+    <param
+      name="kalman_initial_yaw_rate_std_degps"
+      value="$(var apriltag_kalman_initial_yaw_rate_std_degps)"
+    />
+    <param
+      name="kalman_reset_sec"
+      value="$(var apriltag_kalman_reset_sec)"
     />
     <param name="dictionary" value="$(var apriltag_dictionary)" />
     <param

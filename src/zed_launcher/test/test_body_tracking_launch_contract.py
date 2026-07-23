@@ -64,6 +64,8 @@ def test_depth_assisted_apriltag_defaults_and_parameter_plumbing():
         "apriltag_depth_max_pnp_translation_delta_m": "0.20",
         "apriltag_depth_max_pnp_rotation_delta_deg": "20.0",
         "apriltag_depth_max_size_error_fraction": "0.25",
+        "apriltag_pnp_ambiguity_reprojection_margin_px": "0.25",
+        "apriltag_pnp_prior_max_age_sec": "0.25",
         "apriltag_learn_tag_transform": "true",
         "apriltag_tag_transform_bootstrap_duration_sec": "2.5",
         "apriltag_tag_transform_bootstrap_min_samples": "30",
@@ -73,6 +75,15 @@ def test_depth_assisted_apriltag_defaults_and_parameter_plumbing():
         "apriltag_tag_transform_online_alpha": "0.01",
         "apriltag_tag_transform_max_translation_step_m": "0.002",
         "apriltag_tag_transform_max_rotation_step_deg": "0.25",
+        "apriltag_tag_pair_baseline_orientation_weight": "0.0",
+        "apriltag_fixed_tag_frame_z_m": "1.0",
+        "apriltag_kalman_position_measurement_std_m": "0.010",
+        "apriltag_kalman_yaw_measurement_std_deg": "1.5",
+        "apriltag_kalman_linear_acceleration_std_mps2": "1.0",
+        "apriltag_kalman_yaw_acceleration_std_degps2": "90.0",
+        "apriltag_kalman_initial_linear_velocity_std_mps": "1.0",
+        "apriltag_kalman_initial_yaw_rate_std_degps": "90.0",
+        "apriltag_kalman_reset_sec": "0.5",
     }
     expected_parameter_sources = {
         "use_depth": "apriltag_use_depth",
@@ -88,6 +99,9 @@ def test_depth_assisted_apriltag_defaults_and_parameter_plumbing():
             "apriltag_depth_max_pnp_rotation_delta_deg",
         "depth_max_size_error_fraction":
             "apriltag_depth_max_size_error_fraction",
+        "pnp_ambiguity_reprojection_margin_px":
+            "apriltag_pnp_ambiguity_reprojection_margin_px",
+        "pnp_prior_max_age_sec": "apriltag_pnp_prior_max_age_sec",
         "learn_tag_transform": "apriltag_learn_tag_transform",
         "tag_transform_bootstrap_duration_sec":
             "apriltag_tag_transform_bootstrap_duration_sec",
@@ -104,6 +118,22 @@ def test_depth_assisted_apriltag_defaults_and_parameter_plumbing():
             "apriltag_tag_transform_max_translation_step_m",
         "tag_transform_max_rotation_step_deg":
             "apriltag_tag_transform_max_rotation_step_deg",
+        "tag_pair_baseline_orientation_weight":
+            "apriltag_tag_pair_baseline_orientation_weight",
+        "fixed_tag_frame_z_m": "apriltag_fixed_tag_frame_z_m",
+        "kalman_position_measurement_std_m":
+            "apriltag_kalman_position_measurement_std_m",
+        "kalman_yaw_measurement_std_deg":
+            "apriltag_kalman_yaw_measurement_std_deg",
+        "kalman_linear_acceleration_std_mps2":
+            "apriltag_kalman_linear_acceleration_std_mps2",
+        "kalman_yaw_acceleration_std_degps2":
+            "apriltag_kalman_yaw_acceleration_std_degps2",
+        "kalman_initial_linear_velocity_std_mps":
+            "apriltag_kalman_initial_linear_velocity_std_mps",
+        "kalman_initial_yaw_rate_std_degps":
+            "apriltag_kalman_initial_yaw_rate_std_degps",
+        "kalman_reset_sec": "apriltag_kalman_reset_sec",
     }
 
     assert {

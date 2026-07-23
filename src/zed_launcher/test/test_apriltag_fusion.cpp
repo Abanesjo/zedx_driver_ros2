@@ -34,10 +34,30 @@ public:
     return node.tagFrameFromSingleTag(slot, fusion_from_tag);
   }
 
-  static tf2::Transform both(const ApriltagFusionNode &node,
-                             const tf2::Transform &fusion_from_front,
-                             const tf2::Transform &fusion_from_back) {
-    return node.tagFrameFromBothTags(fusion_from_front, fusion_from_back);
+  static tf2::Transform
+  both(const ApriltagFusionNode &node, const tf2::Transform &fusion_from_front,
+       const tf2::Transform &fusion_from_back, double front_quality = 1.0,
+       double back_quality = 1.0, double baseline_orientation_weight = 0.0) {
+    return node.tagFrameFromBothTags(fusion_from_front, fusion_from_back,
+                                     front_quality, back_quality,
+                                     baseline_orientation_weight);
+  }
+
+  static tf2::Quaternion blendTagNormal(const tf2::Quaternion &pnp_rotation,
+                                        const tf2::Quaternion &depth_rotation,
+                                        double depth_weight) {
+    return ApriltagFusionNode::blendTagNormal(pnp_rotation, depth_rotation,
+                                              depth_weight);
+  }
+
+  static std::optional<size_t>
+  selectPnpCandidate(const std::vector<cv::Mat> &candidate_rvecs,
+                     const std::vector<double> &candidate_squared_errors,
+                     const cv::Mat *prior_rvec, double ambiguity_margin_px,
+                     size_t corner_count) {
+    return ApriltagFusionNode::selectPnpCandidate(
+        candidate_rvecs, candidate_squared_errors, prior_rvec,
+        ambiguity_margin_px, corner_count);
   }
 
   static void updateSeparation(ApriltagFusionNode &node,
@@ -95,18 +115,32 @@ public:
     node.fuseAndPublish();
   }
 
-  static rclcpp::Time lastSmoothedReceipt(const ApriltagFusionNode &node) {
-    return node.last_smoothed_receipt_time_;
+  static rclcpp::Time lastKalmanFilterTime(const ApriltagFusionNode &node) {
+    return node.last_kalman_filter_time_;
   }
 
-  static tf2::Transform smoothedTransform(const ApriltagFusionNode &node) {
-    return node.smoothed_fusion_from_tag_frame_;
+  static tf2::Transform filteredTransform(const ApriltagFusionNode &node) {
+    return node.kalmanFilteredTransform();
   }
 
-  static tf2::Transform smooth(ApriltagFusionNode &node,
+  static tf2::Transform filter(ApriltagFusionNode &node,
                                const tf2::Transform &transform,
-                               const rclcpp::Time &receipt_time) {
-    return node.smoothTransform(transform, receipt_time);
+                               const rclcpp::Time &filter_time) {
+    return node.filterTransform(transform, filter_time);
+  }
+
+  static double kalmanVelocity(const ApriltagFusionNode &node,
+                               std::size_t axis) {
+    return node.kalman_axes_.at(axis).velocity;
+  }
+
+  static std::optional<double> constrainedYaw(const tf2::Quaternion &rotation,
+                                              bool allow_axis_fallback = true) {
+    return ApriltagFusionNode::constrainedYaw(rotation, allow_axis_fallback);
+  }
+
+  static tf2::Quaternion constrainedRotation(double yaw) {
+    return ApriltagFusionNode::constrainedRotation(yaw);
   }
 
   static bool drawDebugMarkerOutline(cv::Mat &bgr,
@@ -328,8 +362,7 @@ protected:
             "camera_names",
             std::vector<std::string>{"camera_0", "camera_1", "camera_2"}),
         rclcpp::Parameter("publish_tf", false),
-        rclcpp::Parameter("publish_fusion_pose", true),
-        rclcpp::Parameter("smoothing_time_constant_sec", 0.0)};
+        rclcpp::Parameter("publish_fusion_pose", true)};
     parameters.insert(parameters.end(), additional_parameters.begin(),
                       additional_parameters.end());
     rclcpp::NodeOptions options;
@@ -357,34 +390,241 @@ TEST_F(ApriltagFusionTest, DefaultInterfaceMatchesDualTagContract) {
       2.5);
   EXPECT_EQ(node->get_parameter("tag_transform_bootstrap_min_samples").as_int(),
             30);
+  EXPECT_DOUBLE_EQ(
+      node->get_parameter("kalman_position_measurement_std_m").as_double(),
+      0.010);
+  EXPECT_DOUBLE_EQ(
+      node->get_parameter("kalman_yaw_measurement_std_deg").as_double(), 1.5);
+  EXPECT_DOUBLE_EQ(node->get_parameter("fixed_tag_frame_z_m").as_double(), 1.0);
+  EXPECT_DOUBLE_EQ(node->get_parameter("kalman_reset_sec").as_double(), 0.5);
+  EXPECT_FALSE(node->has_parameter("smoothing_time_constant_sec"));
   EXPECT_FALSE(node->get_parameter("publish_debug_images").as_bool());
   EXPECT_EQ(node->get_parameter("camera_names").as_string_array().size(), 3U);
 }
 
-TEST_F(ApriltagFusionTest,
-       SmoothingUsesReceiptTimeWhenImageTimestampsRepeatOrReorder) {
-  auto node =
-      makeNode({rclcpp::Parameter("smoothing_time_constant_sec", 0.10)});
+TEST_F(ApriltagFusionTest, KalmanOutputHasFixedWorldHeightAndYawConstraint) {
+  for (const double yaw : {-kPi, -1.2, 0.0, 0.7, kPi}) {
+    const auto constrained =
+        ApriltagFusionNodeTestPeer::constrainedRotation(yaw);
+    const auto tag_y =
+        tf2::Matrix3x3(constrained) * tf2::Vector3(0.0, 1.0, 0.0);
+    expectVectorNear(tag_y, tf2::Vector3(0.0, 0.0, -1.0), 1e-12);
+    const auto recovered_yaw =
+        ApriltagFusionNodeTestPeer::constrainedYaw(constrained);
+    ASSERT_TRUE(recovered_yaw);
+    EXPECT_NEAR(std::remainder(*recovered_yaw - yaw, 2.0 * kPi), 0.0, 1e-12);
+  }
+
+  constexpr double kKnownYaw = 0.83;
+  auto locally_tilted =
+      ApriltagFusionNodeTestPeer::constrainedRotation(kKnownYaw) *
+      rotation(0.41, 0.0, 0.0);
+  locally_tilted.normalize();
+  const auto projected_tilted_yaw =
+      ApriltagFusionNodeTestPeer::constrainedYaw(locally_tilted);
+  ASSERT_TRUE(projected_tilted_yaw);
+  EXPECT_NEAR(std::remainder(*projected_tilted_yaw - kKnownYaw, 2.0 * kPi), 0.0,
+              1e-12);
+
+  auto node = makeNode();
   const auto clock_type = node->get_clock()->get_clock_type();
-  const auto identity = tf2::Transform::getIdentity();
-  const tf2::Transform target(rotation(0.0, 0.0, 0.5),
-                              tf2::Vector3(1.0, 0.0, 0.0));
+  const tf2::Transform measurement(rotation(0.31, -0.27, 0.63),
+                                   tf2::Vector3(1.2, -0.4, 0.8));
+  const auto expected_yaw =
+      ApriltagFusionNodeTestPeer::constrainedYaw(measurement.getRotation());
+  ASSERT_TRUE(expected_yaw);
+  const auto filtered = ApriltagFusionNodeTestPeer::filter(
+      *node, measurement, rclcpp::Time(1, 0, clock_type));
 
-  ApriltagFusionNodeTestPeer::smooth(*node, identity,
+  expectVectorNear(filtered.getOrigin(), tf2::Vector3(1.2, -0.4, 1.0));
+  expectRotationNear(
+      filtered.getRotation(),
+      ApriltagFusionNodeTestPeer::constrainedRotation(*expected_yaw), 1e-12);
+  expectVectorNear(filtered.getBasis() * tf2::Vector3(0.0, 1.0, 0.0),
+                   tf2::Vector3(0.0, 0.0, -1.0), 1e-12);
+
+  auto changed_height = measurement;
+  changed_height.setOrigin(tf2::Vector3(1.3, -0.2, -4.0));
+  const auto second_filtered = ApriltagFusionNodeTestPeer::filter(
+      *node, changed_height, rclcpp::Time(1, 33333333, clock_type));
+  EXPECT_DOUBLE_EQ(second_filtered.getOrigin().z(), 1.0);
+  EXPECT_DOUBLE_EQ(ApriltagFusionNodeTestPeer::kalmanVelocity(*node, 2), 0.0);
+}
+
+TEST_F(ApriltagFusionTest, KalmanConstantVelocityModelLearnsLinearAndYawRate) {
+  auto node =
+      makeNode({rclcpp::Parameter("kalman_linear_acceleration_std_mps2", 0.0),
+                rclcpp::Parameter("kalman_yaw_acceleration_std_degps2", 0.0)});
+  const auto clock_type = node->get_clock()->get_clock_type();
+  const auto pose = [](double x, double yaw) {
+    return tf2::Transform(ApriltagFusionNodeTestPeer::constrainedRotation(yaw),
+                          tf2::Vector3(x, 0.0, 0.0));
+  };
+
+  ApriltagFusionNodeTestPeer::filter(*node, pose(0.0, 0.0),
                                      rclcpp::Time(1, 0, clock_type));
-  const auto first = ApriltagFusionNodeTestPeer::smooth(
-      *node, target, rclcpp::Time(1, 10000000, clock_type));
-  const auto second = ApriltagFusionNodeTestPeer::smooth(
-      *node, target, rclcpp::Time(1, 20000000, clock_type));
+  ApriltagFusionNodeTestPeer::filter(*node, pose(0.1, 0.1),
+                                     rclcpp::Time(1, 100000000, clock_type));
+  const auto third = ApriltagFusionNodeTestPeer::filter(
+      *node, pose(0.2, 0.2), rclcpp::Time(1, 200000000, clock_type));
 
-  const double first_alpha = 1.0 - std::exp(-0.01 / 0.10);
-  const double second_alpha = 1.0 - std::exp(-0.02 / 0.10);
-  EXPECT_NEAR(first.getOrigin().x(), first_alpha, 1e-9);
-  EXPECT_NEAR(second.getOrigin().x(), second_alpha, 1e-9);
-  EXPECT_GT(second.getOrigin().x(), first.getOrigin().x());
-  EXPECT_LT(second.getOrigin().x(), target.getOrigin().x());
-  EXPECT_LT(rotationErrorDegrees(second.getRotation(), identity.getRotation()),
-            0.5 * 180.0 / kPi);
+  EXPECT_GT(ApriltagFusionNodeTestPeer::kalmanVelocity(*node, 0), 0.5);
+  EXPECT_GT(ApriltagFusionNodeTestPeer::kalmanVelocity(*node, 3), 0.5);
+  EXPECT_GT(third.getOrigin().x(), 0.19);
+  const auto third_yaw =
+      ApriltagFusionNodeTestPeer::constrainedYaw(third.getRotation());
+  ASSERT_TRUE(third_yaw);
+  EXPECT_GT(*third_yaw, 0.19);
+}
+
+TEST_F(ApriltagFusionTest, KalmanYawInnovationWrapsAcrossPi) {
+  auto node = makeNode();
+  const auto clock_type = node->get_clock()->get_clock_type();
+  const auto pose = [](double yaw) {
+    return tf2::Transform(ApriltagFusionNodeTestPeer::constrainedRotation(yaw),
+                          tf2::Vector3(0.0, 0.0, 0.0));
+  };
+  const double first_yaw = 179.0 / 180.0 * kPi;
+  const double second_yaw = -179.0 / 180.0 * kPi;
+
+  ApriltagFusionNodeTestPeer::filter(*node, pose(first_yaw),
+                                     rclcpp::Time(1, 0, clock_type));
+  const auto filtered = ApriltagFusionNodeTestPeer::filter(
+      *node, pose(second_yaw), rclcpp::Time(1, 33333333, clock_type));
+  const auto filtered_yaw =
+      ApriltagFusionNodeTestPeer::constrainedYaw(filtered.getRotation());
+
+  ASSERT_TRUE(filtered_yaw);
+  EXPECT_GT(std::abs(*filtered_yaw), 170.0 / 180.0 * kPi);
+  EXPECT_LT(std::abs(std::remainder(*filtered_yaw - second_yaw, 2.0 * kPi)),
+            2.0 / 180.0 * kPi);
+  EXPECT_LT(std::abs(ApriltagFusionNodeTestPeer::kalmanVelocity(*node, 3)),
+            2.0);
+}
+
+TEST_F(ApriltagFusionTest, KalmanReducesStationaryPositionAndYawNoise) {
+  auto node = makeNode();
+  const auto clock_type = node->get_clock()->get_clock_type();
+  double squared_position_sum = 0.0;
+  double squared_yaw_sum = 0.0;
+  std::size_t sample_count = 0;
+  for (std::size_t index = 0; index < 120; ++index) {
+    const double sign = index % 2 == 0 ? -1.0 : 1.0;
+    const double measured_yaw = sign * kPi / 180.0;
+    const tf2::Transform measurement(
+        ApriltagFusionNodeTestPeer::constrainedRotation(measured_yaw),
+        tf2::Vector3(sign * 0.010, 0.0, 0.0));
+    const auto filtered = ApriltagFusionNodeTestPeer::filter(
+        *node, measurement,
+        rclcpp::Time(1000000000LL + static_cast<int64_t>(index) * 33333333LL,
+                     clock_type));
+    if (index < 20) {
+      continue;
+    }
+    const auto filtered_yaw =
+        ApriltagFusionNodeTestPeer::constrainedYaw(filtered.getRotation());
+    ASSERT_TRUE(filtered_yaw);
+    squared_position_sum += filtered.getOrigin().x() * filtered.getOrigin().x();
+    squared_yaw_sum += *filtered_yaw * *filtered_yaw;
+    ++sample_count;
+  }
+
+  const double position_rms =
+      std::sqrt(squared_position_sum / static_cast<double>(sample_count));
+  const double yaw_rms =
+      std::sqrt(squared_yaw_sum / static_cast<double>(sample_count));
+  EXPECT_LT(position_rms, 0.003);
+  EXPECT_LT(yaw_rms, 0.3 * kPi / 180.0);
+}
+
+TEST_F(ApriltagFusionTest, KalmanResetsVelocityAfterMeasurementGap) {
+  auto node = makeNode({rclcpp::Parameter("kalman_reset_sec", 0.5)});
+  const auto clock_type = node->get_clock()->get_clock_type();
+  const auto pose = [](double x) {
+    return tf2::Transform(ApriltagFusionNodeTestPeer::constrainedRotation(0.0),
+                          tf2::Vector3(x, 0.0, 0.0));
+  };
+
+  ApriltagFusionNodeTestPeer::filter(*node, pose(0.0),
+                                     rclcpp::Time(1, 0, clock_type));
+  ApriltagFusionNodeTestPeer::filter(*node, pose(0.1),
+                                     rclcpp::Time(1, 100000000, clock_type));
+  ASSERT_GT(ApriltagFusionNodeTestPeer::kalmanVelocity(*node, 0), 0.0);
+  const auto reset = ApriltagFusionNodeTestPeer::filter(
+      *node, pose(3.0), rclcpp::Time(2, 0, clock_type));
+
+  EXPECT_DOUBLE_EQ(reset.getOrigin().x(), 3.0);
+  EXPECT_DOUBLE_EQ(ApriltagFusionNodeTestPeer::kalmanVelocity(*node, 0), 0.0);
+
+  const auto backward_time_reset = ApriltagFusionNodeTestPeer::filter(
+      *node, pose(4.0), rclcpp::Time(1, 500000000, clock_type));
+  EXPECT_DOUBLE_EQ(backward_time_reset.getOrigin().x(), 4.0);
+  EXPECT_DOUBLE_EQ(ApriltagFusionNodeTestPeer::kalmanVelocity(*node, 0), 0.0);
+}
+
+TEST_F(ApriltagFusionTest,
+       AmbiguousPnpCandidatesPreferPriorButClearWinnerOverridesIt) {
+  const cv::Mat best_rvec = cv::Mat::zeros(3, 1, CV_64F);
+  const cv::Mat prior_rvec = (cv::Mat_<double>(3, 1) << 0.30, -0.10, 0.20);
+  const std::vector<cv::Mat> candidates{best_rvec, prior_rvec};
+
+  const auto ambiguous = ApriltagFusionNodeTestPeer::selectPnpCandidate(
+      candidates, {4.0 * 0.10 * 0.10, 4.0 * 0.20 * 0.20}, &prior_rvec, 0.25, 4);
+  ASSERT_TRUE(ambiguous);
+  EXPECT_EQ(*ambiguous, 1U);
+
+  const auto clear_winner = ApriltagFusionNodeTestPeer::selectPnpCandidate(
+      candidates, {4.0 * 0.10 * 0.10, 4.0 * 0.20 * 0.20}, &prior_rvec, 0.05, 4);
+  ASSERT_TRUE(clear_winner);
+  EXPECT_EQ(*clear_winner, 0U);
+
+  const auto without_prior = ApriltagFusionNodeTestPeer::selectPnpCandidate(
+      candidates, {4.0 * 0.10 * 0.10, 4.0 * 0.20 * 0.20}, nullptr, 0.25, 4);
+  ASSERT_TRUE(without_prior);
+  EXPECT_EQ(*without_prior, 0U);
+}
+
+TEST_F(ApriltagFusionTest, DepthNormalSwingPreservesPnpTwist) {
+  const auto pnp_rotation = rotation(0.37, -0.44, 1.08);
+  const auto pnp_normal =
+      tf2::Matrix3x3(pnp_rotation) * tf2::Vector3(0.0, 0.0, 1.0);
+  auto swing_axis = pnp_normal.cross(tf2::Vector3(0.3, -0.7, 0.2));
+  swing_axis.normalize();
+  tf2::Quaternion full_swing;
+  full_swing.setRotation(swing_axis, 0.24);
+  auto depth_rotation = full_swing * pnp_rotation * rotation(0.0, 0.0, 1.10);
+  depth_rotation.normalize();
+
+  constexpr double kWeight = 0.63;
+  auto partial_swing =
+      tf2::Quaternion::getIdentity().slerp(full_swing, kWeight);
+  partial_swing.normalize();
+  auto expected = partial_swing * pnp_rotation;
+  expected.normalize();
+  const auto actual = ApriltagFusionNodeTestPeer::blendTagNormal(
+      pnp_rotation, depth_rotation, kWeight);
+  expectRotationNear(actual, expected, 1e-9);
+
+  const auto depth_without_twist = full_swing * pnp_rotation;
+  const auto actual_without_twist = ApriltagFusionNodeTestPeer::blendTagNormal(
+      pnp_rotation, depth_without_twist, kWeight);
+  expectRotationNear(actual, actual_without_twist, 1e-9);
+  expectRotationNear(ApriltagFusionNodeTestPeer::blendTagNormal(
+                         pnp_rotation, depth_rotation, 0.0),
+                     pnp_rotation, 1e-9);
+  expectRotationNear(ApriltagFusionNodeTestPeer::blendTagNormal(
+                         pnp_rotation, depth_rotation, 1.0),
+                     depth_without_twist, 1e-9);
+
+  tf2::Quaternion flip;
+  flip.setRotation(swing_axis, kPi);
+  expectRotationNear(ApriltagFusionNodeTestPeer::blendTagNormal(
+                         pnp_rotation, flip * pnp_rotation, 1.0),
+                     pnp_rotation, 1e-9);
+  expectRotationNear(
+      ApriltagFusionNodeTestPeer::blendTagNormal(
+          pnp_rotation, tf2::Quaternion(0.0, 0.0, 0.0, 0.0), 1.0),
+      pnp_rotation, 1e-9);
 }
 
 TEST(ApriltagFusionOverlayTest, DrawsFloatingPointDetectorCorners) {
@@ -600,6 +840,48 @@ TEST_F(ApriltagFusionTest, BothTagsUseRelationConsistentCanonicalCenter) {
   expectTransformNear(result, expected, kTolerance, 1e-6);
 }
 
+TEST_F(ApriltagFusionTest, BothTagsUseMeasuredBaselineToCorrectCanonicalTilt) {
+  const auto node = makeNode();
+  const tf2::Transform true_front(rotation(0.25, -0.18, 0.42),
+                                  tf2::Vector3(1.0, -0.4, 0.8));
+  const auto true_back =
+      true_front * ApriltagFusionNodeTestPeer::activeFrontFromBackTag(*node);
+  const auto measured_axis =
+      (true_front.getOrigin() - true_back.getOrigin()).normalized();
+  auto error_axis = measured_axis.cross(tf2::Vector3(0.2, 0.7, -0.3));
+  error_axis.normalize();
+  tf2::Quaternion orientation_error;
+  orientation_error.setRotation(error_axis, 0.08);
+  auto noisy_front_rotation = orientation_error * true_front.getRotation();
+  auto noisy_back_rotation = orientation_error * true_back.getRotation();
+  noisy_front_rotation.normalize();
+  noisy_back_rotation.normalize();
+  const tf2::Transform noisy_front(noisy_front_rotation,
+                                   true_front.getOrigin());
+  const tf2::Transform noisy_back(noisy_back_rotation, true_back.getOrigin());
+
+  const auto result = ApriltagFusionNodeTestPeer::both(
+      *node, noisy_front, noisy_back, 1.0, 1.0, 1.0);
+  const auto expected = ApriltagFusionNodeTestPeer::single(
+      *node, ApriltagFusionNodeTestPeer::frontSlot(), true_front);
+  expectTransformNear(result, expected, 1e-9, 1e-6);
+  expectVectorNear(result.getOrigin(),
+                   (true_front.getOrigin() + true_back.getOrigin()) * 0.5);
+
+  const auto uncorrected = ApriltagFusionNodeTestPeer::both(
+      *node, noisy_front, noisy_back, 1.0, 1.0, 0.0);
+  EXPECT_GT(
+      rotationErrorDegrees(uncorrected.getRotation(), expected.getRotation()),
+      4.0);
+
+  const tf2::Transform coincident_back(noisy_back_rotation,
+                                       noisy_front.getOrigin());
+  const auto degenerate = ApriltagFusionNodeTestPeer::both(
+      *node, noisy_front, coincident_back, 1.0, 1.0, 1.0);
+  EXPECT_TRUE(std::isfinite(degenerate.getRotation().length2()));
+  EXPECT_NEAR(degenerate.getRotation().length2(), 1.0, 1e-9);
+}
+
 TEST_F(ApriltagFusionTest,
        FullTagTransformLearnsNonIdealRelationAndCanonicalCenter) {
   auto node = makeNode();
@@ -660,6 +942,9 @@ TEST_F(ApriltagFusionTest,
   const auto center_from_back = ApriltagFusionNodeTestPeer::single(
       *node, ApriltagFusionNodeTestPeer::backSlot(), fusion_from_back);
   expectTransformNear(center_from_front, center_from_back, 0.003, 0.6);
+  const auto center_from_both = ApriltagFusionNodeTestPeer::both(
+      *node, fusion_from_front, fusion_from_back);
+  expectTransformNear(center_from_both, center_from_back, 0.003, 0.6);
 }
 
 TEST_F(ApriltagFusionTest, TagTransformRejectsDuplicateStaleAndOutlierPairs) {
@@ -753,9 +1038,17 @@ TEST_F(ApriltagFusionTest,
 
   ApriltagFusionNodeTestPeer::fuseAndPublish(*node);
 
-  const auto expected = ApriltagFusionNodeTestPeer::single(
+  const auto selected = ApriltagFusionNodeTestPeer::single(
       *node, ApriltagFusionNodeTestPeer::frontSlot(), fusion_from_front);
-  expectTransformNear(ApriltagFusionNodeTestPeer::smoothedTransform(*node),
+  const auto expected_yaw =
+      ApriltagFusionNodeTestPeer::constrainedYaw(selected.getRotation());
+  ASSERT_TRUE(expected_yaw);
+  auto expected_origin = selected.getOrigin();
+  expected_origin.setZ(1.0);
+  const tf2::Transform expected(
+      ApriltagFusionNodeTestPeer::constrainedRotation(*expected_yaw),
+      expected_origin);
+  expectTransformNear(ApriltagFusionNodeTestPeer::filteredTransform(*node),
                       expected, kTolerance, 1e-6);
 }
 
@@ -846,8 +1139,11 @@ TEST_F(ApriltagFusionTest, StaleFallbackUsesQualityThenRecency) {
             ApriltagFusionNodeTestPeer::backSlot());
 }
 
-TEST_F(ApriltagFusionTest, StaleFallbackPreservesRealObservationReceipt) {
+TEST_F(ApriltagFusionTest, StaleFallbackDoesNotAdvanceFilterTime) {
   auto node = makeNode();
+  const auto filter_time = node->now();
+  ApriltagFusionNodeTestPeer::filter(*node, tf2::Transform::getIdentity(),
+                                     filter_time);
   const auto stale_receipt = node->now() - rclcpp::Duration::from_seconds(2.0);
   ApriltagFusionNodeTestPeer::setLastEstimate(
       *node, ApriltagFusionNodeTestPeer::frontSlot(),
@@ -856,8 +1152,8 @@ TEST_F(ApriltagFusionTest, StaleFallbackPreservesRealObservationReceipt) {
   ApriltagFusionNodeTestPeer::fuseAndPublish(*node);
 
   EXPECT_EQ(
-      ApriltagFusionNodeTestPeer::lastSmoothedReceipt(*node).nanoseconds(),
-      stale_receipt.nanoseconds());
+      ApriltagFusionNodeTestPeer::lastKalmanFilterTime(*node).nanoseconds(),
+      filter_time.nanoseconds());
 }
 
 } // namespace

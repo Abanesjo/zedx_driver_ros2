@@ -111,6 +111,30 @@ double lowerLimitBlendWeight(double value, double limit) {
   return smoothstep01((value - limit) / limit);
 }
 
+std::optional<tf2::Quaternion>
+shortestArcQuaternion(const tf2::Vector3 &from_value,
+                      const tf2::Vector3 &to_value) {
+  auto from = from_value;
+  auto to = to_value;
+  if (!std::isfinite(from.length2()) || !std::isfinite(to.length2()) ||
+      from.length2() <= 1e-12 || to.length2() <= 1e-12) {
+    return std::nullopt;
+  }
+  from.normalize();
+  to.normalize();
+  const double dot = std::clamp(from.dot(to), -1.0, 1.0);
+  if (dot < -1.0 + 1e-9) {
+    return std::nullopt;
+  }
+  const auto cross = from.cross(to);
+  tf2::Quaternion result(cross.x(), cross.y(), cross.z(), 1.0 + dot);
+  if (result.length2() <= 1e-12) {
+    return std::nullopt;
+  }
+  result.normalize();
+  return result;
+}
+
 } // namespace
 
 ApriltagFusionNode::ArucoDetectorAdapter::ArucoDetectorAdapter(
@@ -183,6 +207,10 @@ ApriltagFusionNode::ApriltagFusionNode(const rclcpp::NodeOptions &options,
       declare_parameter<double>("depth_max_pnp_rotation_delta_deg", 20.0);
   depth_max_size_error_fraction_ =
       declare_parameter<double>("depth_max_size_error_fraction", 0.25);
+  pnp_ambiguity_reprojection_margin_px_ =
+      declare_parameter<double>("pnp_ambiguity_reprojection_margin_px", 0.25);
+  pnp_prior_max_age_sec_ =
+      declare_parameter<double>("pnp_prior_max_age_sec", 0.25);
   learn_tag_transform_ = declare_parameter<bool>("learn_tag_transform", true);
   tag_transform_bootstrap_duration_sec_ =
       declare_parameter<double>("tag_transform_bootstrap_duration_sec", 2.5);
@@ -200,6 +228,8 @@ ApriltagFusionNode::ApriltagFusionNode(const rclcpp::NodeOptions &options,
       declare_parameter<double>("tag_transform_max_translation_step_m", 0.002);
   tag_transform_max_rotation_step_deg_ =
       declare_parameter<double>("tag_transform_max_rotation_step_deg", 0.25);
+  tag_pair_baseline_orientation_weight_ =
+      declare_parameter<double>("tag_pair_baseline_orientation_weight", 0.0);
   max_detection_rate_hz_ =
       declare_parameter<double>("max_detection_rate_hz", 30.0);
   fusion_publish_rate_hz_ =
@@ -226,9 +256,20 @@ ApriltagFusionNode::ApriltagFusionNode(const rclcpp::NodeOptions &options,
       declare_parameter<double>("max_translation_disagreement_m", 0.25);
   max_rotation_disagreement_deg_ =
       declare_parameter<double>("max_rotation_disagreement_deg", 25.0);
-  smoothing_time_constant_sec_ =
-      declare_parameter<double>("smoothing_time_constant_sec", 0.10);
-  smoothing_reset_sec_ = declare_parameter<double>("smoothing_reset_sec", 0.50);
+  fixed_tag_frame_z_m_ = declare_parameter<double>("fixed_tag_frame_z_m", 1.0);
+  kalman_position_measurement_std_m_ =
+      declare_parameter<double>("kalman_position_measurement_std_m", 0.010);
+  kalman_yaw_measurement_std_deg_ =
+      declare_parameter<double>("kalman_yaw_measurement_std_deg", 1.5);
+  kalman_linear_acceleration_std_mps2_ =
+      declare_parameter<double>("kalman_linear_acceleration_std_mps2", 1.0);
+  kalman_yaw_acceleration_std_degps2_ =
+      declare_parameter<double>("kalman_yaw_acceleration_std_degps2", 90.0);
+  kalman_initial_linear_velocity_std_mps_ =
+      declare_parameter<double>("kalman_initial_linear_velocity_std_mps", 1.0);
+  kalman_initial_yaw_rate_std_degps_ =
+      declare_parameter<double>("kalman_initial_yaw_rate_std_degps", 90.0);
+  kalman_reset_sec_ = declare_parameter<double>("kalman_reset_sec", 0.50);
 
   learned_tag_separation_m_ = 2.0 * initial_tag_frame_offset_m_;
   tf2::Quaternion ideal_back_from_front;
@@ -319,6 +360,14 @@ ApriltagFusionNode::ApriltagFusionNode(const rclcpp::NodeOptions &options,
     throw std::runtime_error(
         "depth_max_size_error_fraction must be non-negative");
   }
+  if (!std::isfinite(pnp_ambiguity_reprojection_margin_px_) ||
+      pnp_ambiguity_reprojection_margin_px_ < 0.0) {
+    throw std::runtime_error(
+        "pnp_ambiguity_reprojection_margin_px must be non-negative");
+  }
+  if (!std::isfinite(pnp_prior_max_age_sec_) || pnp_prior_max_age_sec_ < 0.0) {
+    throw std::runtime_error("pnp_prior_max_age_sec must be non-negative");
+  }
   if (!std::isfinite(tag_transform_bootstrap_duration_sec_) ||
       tag_transform_bootstrap_duration_sec_ < 0.0) {
     throw std::runtime_error(
@@ -359,6 +408,12 @@ ApriltagFusionNode::ApriltagFusionNode(const rclcpp::NodeOptions &options,
     throw std::runtime_error(
         "tag_transform_max_rotation_step_deg must be in [0, 180]");
   }
+  if (!std::isfinite(tag_pair_baseline_orientation_weight_) ||
+      tag_pair_baseline_orientation_weight_ < 0.0 ||
+      tag_pair_baseline_orientation_weight_ > 1.0) {
+    throw std::runtime_error(
+        "tag_pair_baseline_orientation_weight must be in [0, 1]");
+  }
   if (!std::isfinite(max_detection_rate_hz_) || max_detection_rate_hz_ < 0.0) {
     throw std::runtime_error("max_detection_rate_hz must be non-negative");
   }
@@ -398,13 +453,40 @@ ApriltagFusionNode::ApriltagFusionNode(const rclcpp::NodeOptions &options,
     throw std::runtime_error(
         "max_rotation_disagreement_deg must be in [0, 180]");
   }
-  if (!std::isfinite(smoothing_time_constant_sec_) ||
-      smoothing_time_constant_sec_ < 0.0) {
-    throw std::runtime_error(
-        "smoothing_time_constant_sec must be non-negative");
+  if (!std::isfinite(fixed_tag_frame_z_m_)) {
+    throw std::runtime_error("fixed_tag_frame_z_m must be finite");
   }
-  if (!std::isfinite(smoothing_reset_sec_) || smoothing_reset_sec_ < 0.0) {
-    throw std::runtime_error("smoothing_reset_sec must be non-negative");
+  if (!std::isfinite(kalman_position_measurement_std_m_) ||
+      kalman_position_measurement_std_m_ <= 0.0) {
+    throw std::runtime_error(
+        "kalman_position_measurement_std_m must be positive");
+  }
+  if (!std::isfinite(kalman_yaw_measurement_std_deg_) ||
+      kalman_yaw_measurement_std_deg_ <= 0.0) {
+    throw std::runtime_error("kalman_yaw_measurement_std_deg must be positive");
+  }
+  if (!std::isfinite(kalman_linear_acceleration_std_mps2_) ||
+      kalman_linear_acceleration_std_mps2_ < 0.0) {
+    throw std::runtime_error(
+        "kalman_linear_acceleration_std_mps2 must be non-negative");
+  }
+  if (!std::isfinite(kalman_yaw_acceleration_std_degps2_) ||
+      kalman_yaw_acceleration_std_degps2_ < 0.0) {
+    throw std::runtime_error(
+        "kalman_yaw_acceleration_std_degps2 must be non-negative");
+  }
+  if (!std::isfinite(kalman_initial_linear_velocity_std_mps_) ||
+      kalman_initial_linear_velocity_std_mps_ < 0.0) {
+    throw std::runtime_error(
+        "kalman_initial_linear_velocity_std_mps must be non-negative");
+  }
+  if (!std::isfinite(kalman_initial_yaw_rate_std_degps_) ||
+      kalman_initial_yaw_rate_std_degps_ < 0.0) {
+    throw std::runtime_error(
+        "kalman_initial_yaw_rate_std_degps must be non-negative");
+  }
+  if (!std::isfinite(kalman_reset_sec_) || kalman_reset_sec_ < 0.0) {
+    throw std::runtime_error("kalman_reset_sec must be non-negative");
   }
   if (!publish_fusion_pose_ && !publish_tf_ && !publish_debug_images_) {
     throw std::runtime_error("At least one output must be enabled");
@@ -643,9 +725,23 @@ std::optional<sensor_msgs::msg::Image> ApriltagFusionNode::processImage(
   }
 
   sensor_msgs::msg::CameraInfo::SharedPtr camera_info;
+  std::array<std::optional<PoseEstimate>, kTagCount> pnp_priors;
   {
     std::lock_guard<std::mutex> lock(camera.mutex);
     camera_info = camera.latest_camera_info;
+    for (size_t tag_slot = 0; tag_slot < kTagCount; ++tag_slot) {
+      auto &timed_estimate = camera.latest_pose_estimates[tag_slot];
+      if (!timed_estimate) {
+        continue;
+      }
+      const double age =
+          (current_time - timed_estimate->receipt_time).seconds();
+      if (age >= 0.0 && age <= pnp_prior_max_age_sec_) {
+        pnp_priors[tag_slot] = timed_estimate->estimate;
+      } else {
+        timed_estimate.reset();
+      }
+    }
   }
   if (!camera_info) {
     RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
@@ -698,7 +794,8 @@ std::optional<sensor_msgs::msg::Image> ApriltagFusionNode::processImage(
       pose_estimates[tag_slot] = estimateTagInCameraFrame(
           corners[marker_index], *camera_matrix, distortion_coeffs,
           tagSize(tag_slot), depth_frame ? &*depth_frame : nullptr,
-          source.width, source.height);
+          source.width, source.height,
+          pnp_priors[tag_slot] ? &*pnp_priors[tag_slot] : nullptr);
     } catch (const cv::Exception &ex) {
       RCLCPP_WARN_THROTTLE(
           get_logger(), *get_clock(), 2000,
@@ -723,11 +820,17 @@ std::optional<sensor_msgs::msg::Image> ApriltagFusionNode::processImage(
       pose_estimates[tag_slot].reset();
       continue;
     }
+    {
+      std::lock_guard<std::mutex> lock(camera.mutex);
+      camera.latest_pose_estimates[tag_slot] =
+          TimedPoseEstimate{*pose_estimates[tag_slot], current_time};
+    }
     if (pose_estimates[tag_slot]->used_depth) {
       RCLCPP_DEBUG(get_logger(),
                    "Depth-assisted AprilTag id=%d on %s: samples=%zu/%zu "
                    "valid=%.2f plane_rmse=%.4fm size_error=%.3f "
-                   "pnp_delta=%.3fm/%.2fdeg blend=%.2f weight=%.2f",
+                   "pnp_delta=%.3fm/%.2fdeg blend_t=%.2f blend_r=%.2f "
+                   "weight=%.2f",
                    tagId(tag_slot), camera.name.c_str(),
                    pose_estimates[tag_slot]->depth_inlier_samples,
                    pose_estimates[tag_slot]->depth_valid_samples,
@@ -737,6 +840,7 @@ std::optional<sensor_msgs::msg::Image> ApriltagFusionNode::processImage(
                    pose_estimates[tag_slot]->depth_pnp_translation_delta_m,
                    pose_estimates[tag_slot]->depth_pnp_rotation_delta_deg,
                    pose_estimates[tag_slot]->depth_blend_weight,
+                   pose_estimates[tag_slot]->depth_rotation_blend_weight,
                    pose_estimates[tag_slot]->estimator_weight);
     }
 
@@ -744,12 +848,14 @@ std::optional<sensor_msgs::msg::Image> ApriltagFusionNode::processImage(
       const auto &label_corner = corners[marker_index].front();
       const std::string estimator_label =
           pose_estimates[tag_slot]->used_depth
-              ? cv::format("DEPTH %.0f%% %zu/%zu rms=%.1fmm",
-                           100.0 * pose_estimates[tag_slot]->depth_blend_weight,
-                           pose_estimates[tag_slot]->depth_inlier_samples,
-                           pose_estimates[tag_slot]->depth_valid_samples,
-                           1000.0 *
-                               pose_estimates[tag_slot]->depth_plane_rmse_m)
+              ? cv::format(
+                    "DEPTH T%.0f%% R%.0f%% %zu/%zu rms=%.1fmm",
+                    100.0 * pose_estimates[tag_slot]->depth_blend_weight,
+                    100.0 *
+                        pose_estimates[tag_slot]->depth_rotation_blend_weight,
+                    pose_estimates[tag_slot]->depth_inlier_samples,
+                    pose_estimates[tag_slot]->depth_valid_samples,
+                    1000.0 * pose_estimates[tag_slot]->depth_plane_rmse_m)
               : "PNP";
       try {
         cv::putText(debug_image, estimator_label,
@@ -958,7 +1064,6 @@ void ApriltagFusionNode::fuseAndPublish() {
 
   tf2::Transform fusion_from_tag_frame;
   rclcpp::Time source_stamp;
-  rclcpp::Time source_receipt;
   std::vector<uint64_t> source_sequences;
   bool using_stale_fallback = false;
 
@@ -989,12 +1094,16 @@ void ApriltagFusionNode::fuseAndPublish() {
   }
   if (synchronized_pair && relation_consistent_pair) {
     updateTagSeparation(*front, *back);
+    const double pair_stamp_delta_sec = std::abs(
+        (front->observation.stamp - back->observation.stamp).seconds());
+    const double baseline_orientation_weight =
+        tag_pair_baseline_orientation_weight_ *
+        upperLimitBlendWeight(pair_stamp_delta_sec, sync_tolerance_sec_);
     fusion_from_tag_frame = tagFrameFromBothTags(
         front->observation.fusion_from_tag, back->observation.fusion_from_tag,
-        front->observation.quality, back->observation.quality);
+        front->observation.quality, back->observation.quality,
+        baseline_orientation_weight);
     source_stamp = std::max(front->observation.stamp, back->observation.stamp);
-    source_receipt = std::max(front->observation.receipt_time,
-                              back->observation.receipt_time);
     source_sequences = front->source_sequences;
     source_sequences.insert(source_sequences.end(),
                             back->source_sequences.begin(),
@@ -1022,7 +1131,6 @@ void ApriltagFusionNode::fuseAndPublish() {
     fusion_from_tag_frame = tagFrameFromSingleTag(
         selected_slot, selected->observation.fusion_from_tag);
     source_stamp = selected->observation.stamp;
-    source_receipt = selected->observation.receipt_time;
     source_sequences = selected->source_sequences;
   } else {
     const auto selected_slot = selectFallbackTagSlot();
@@ -1033,8 +1141,14 @@ void ApriltagFusionNode::fuseAndPublish() {
     fusion_from_tag_frame = tagFrameFromSingleTag(
         *selected_slot, selected.observation.fusion_from_tag);
     source_stamp = current_time;
-    source_receipt = selected.observation.receipt_time;
     using_stale_fallback = true;
+  }
+
+  if (!finiteTransform(fusion_from_tag_frame)) {
+    RCLCPP_WARN_THROTTLE(
+        get_logger(), *get_clock(), 2000,
+        "Rejected non-finite fused AprilTag transform before Kalman update");
+    return;
   }
 
   std::sort(source_sequences.begin(), source_sequences.end());
@@ -1042,8 +1156,11 @@ void ApriltagFusionNode::fuseAndPublish() {
     return;
   }
 
-  const auto smoothed = smoothTransform(fusion_from_tag_frame, source_receipt);
-  publishResult(smoothed, source_stamp);
+  const auto filtered =
+      using_stale_fallback && has_kalman_state_
+          ? kalmanFilteredTransform()
+          : filterTransform(fusion_from_tag_frame, current_time);
+  publishResult(filtered, source_stamp);
 
   if (!using_stale_fallback) {
     last_published_sequences_ = std::move(source_sequences);
@@ -1152,7 +1269,7 @@ tf2::Transform ApriltagFusionNode::tagFrameFromSingleTag(
 tf2::Transform ApriltagFusionNode::tagFrameFromBothTags(
     const tf2::Transform &fusion_from_front_tag,
     const tf2::Transform &fusion_from_back_tag, double front_quality,
-    double back_quality) const {
+    double back_quality, double baseline_orientation_weight) const {
   const auto center_from_front =
       tagFrameFromSingleTag(kFrontTagSlot, fusion_from_front_tag);
   const auto center_from_back =
@@ -1162,9 +1279,9 @@ tf2::Transform ApriltagFusionNode::tagFrameFromBothTags(
   const double back_weight =
       std::isfinite(back_quality) && back_quality > 0.0 ? back_quality : 1.0;
   const double total_weight = front_weight + back_weight;
-  const auto origin = (center_from_front.getOrigin() * front_weight +
-                       center_from_back.getOrigin() * back_weight) /
-                      total_weight;
+  const auto origin =
+      (fusion_from_front_tag.getOrigin() + fusion_from_back_tag.getOrigin()) *
+      0.5;
 
   auto front_rotation = center_from_front.getRotation();
   auto back_rotation = center_from_back.getRotation();
@@ -1188,7 +1305,71 @@ tf2::Transform ApriltagFusionNode::tagFrameFromBothTags(
   } else {
     rotation.normalize();
   }
+
+  const auto front_from_back = activeFrontFromBackTag();
+  const auto expected_back_from_front = front_from_back.inverse().getOrigin();
+  const auto measured_back_from_front =
+      fusion_from_front_tag.getOrigin() - fusion_from_back_tag.getOrigin();
+  const double expected_length = expected_back_from_front.length();
+  const double measured_length = measured_back_from_front.length();
+  if (std::isfinite(baseline_orientation_weight) &&
+      baseline_orientation_weight > 0.0 && std::isfinite(expected_length) &&
+      expected_length > 1e-6 && std::isfinite(measured_length) &&
+      measured_length > 1e-6) {
+    const auto predicted_back_from_front =
+        tf2::Matrix3x3(rotation) * expected_back_from_front;
+    const auto correction = shortestArcQuaternion(predicted_back_from_front,
+                                                  measured_back_from_front);
+    if (correction) {
+      const double length_error = std::abs(measured_length - expected_length);
+      const double length_error_limit =
+          std::max(tag_transform_bootstrap_translation_outlier_m_,
+                   0.25 * expected_length);
+      const double axis_error_deg =
+          rotationDistanceDegrees(tf2::Quaternion::getIdentity(), *correction);
+      const double correction_weight =
+          std::clamp(baseline_orientation_weight, 0.0, 1.0) *
+          upperLimitBlendWeight(length_error, length_error_limit) *
+          upperLimitBlendWeight(axis_error_deg, max_rotation_disagreement_deg_);
+      auto partial_correction =
+          tf2::Quaternion::getIdentity().slerp(*correction, correction_weight);
+      partial_correction.normalize();
+      rotation = partial_correction * rotation;
+      rotation.normalize();
+    }
+  }
   return tf2::Transform(rotation, origin);
+}
+
+tf2::Quaternion
+ApriltagFusionNode::blendTagNormal(const tf2::Quaternion &pnp_rotation_value,
+                                   const tf2::Quaternion &depth_rotation_value,
+                                   double depth_weight) {
+  auto pnp_rotation = pnp_rotation_value;
+  auto depth_rotation = depth_rotation_value;
+  if (!std::isfinite(depth_weight) || pnp_rotation.length2() <= 1e-12 ||
+      depth_rotation.length2() <= 1e-12) {
+    return pnp_rotation;
+  }
+  pnp_rotation.normalize();
+  depth_rotation.normalize();
+  const auto pnp_normal =
+      tf2::Matrix3x3(pnp_rotation) * tf2::Vector3(0.0, 0.0, 1.0);
+  const auto depth_normal =
+      tf2::Matrix3x3(depth_rotation) * tf2::Vector3(0.0, 0.0, 1.0);
+  const auto aligned_depth_normal =
+      pnp_normal.dot(depth_normal) < 0.0 ? -depth_normal : depth_normal;
+  const auto full_correction =
+      shortestArcQuaternion(pnp_normal, aligned_depth_normal);
+  if (!full_correction) {
+    return pnp_rotation;
+  }
+  auto partial_correction = tf2::Quaternion::getIdentity().slerp(
+      *full_correction, std::clamp(depth_weight, 0.0, 1.0));
+  partial_correction.normalize();
+  auto result = partial_correction * pnp_rotation;
+  result.normalize();
+  return result;
 }
 
 tf2::Transform ApriltagFusionNode::activeFrontFromBackTag() const {
@@ -1514,46 +1695,188 @@ std::optional<size_t> ApriltagFusionNode::selectFallbackTagSlot() const {
   return kFrontTagSlot;
 }
 
-tf2::Transform
-ApriltagFusionNode::smoothTransform(const tf2::Transform &fusion_from_tag_frame,
-                                    const rclcpp::Time &receipt_time) {
-  const double receipt_delta_sec =
-      has_smoothed_transform_
-          ? (receipt_time - last_smoothed_receipt_time_).seconds()
-          : 0.0;
-  const bool receipt_time_went_backwards =
-      has_smoothed_transform_ && receipt_delta_sec < 0.0;
-  const bool detection_gap_exceeded =
-      has_smoothed_transform_ && receipt_delta_sec > smoothing_reset_sec_;
-  if (!has_smoothed_transform_ || receipt_time_went_backwards ||
-      detection_gap_exceeded || smoothing_time_constant_sec_ == 0.0) {
-    smoothed_fusion_from_tag_frame_ = fusion_from_tag_frame;
-  } else {
-    const double alpha = std::clamp(
-        1.0 - std::exp(-receipt_delta_sec / smoothing_time_constant_sec_), 0.0,
-        1.0);
-    const auto smoothed_translation =
-        smoothed_fusion_from_tag_frame_.getOrigin() * (1.0 - alpha) +
-        fusion_from_tag_frame.getOrigin() * alpha;
+std::optional<double>
+ApriltagFusionNode::constrainedYaw(const tf2::Quaternion &rotation_value,
+                                   bool allow_axis_fallback) {
+  if (!std::isfinite(rotation_value.length2()) ||
+      rotation_value.length2() <= 1e-12) {
+    return std::nullopt;
+  }
+  auto rotation = rotation_value;
+  rotation.normalize();
+  const tf2::Matrix3x3 basis(rotation);
 
-    auto previous_rotation = smoothed_fusion_from_tag_frame_.getRotation();
-    auto target_rotation = fusion_from_tag_frame.getRotation();
-    previous_rotation.normalize();
-    target_rotation.normalize();
-    if (previous_rotation.dot(target_rotation) < 0.0) {
-      target_rotation =
-          tf2::Quaternion(-target_rotation.x(), -target_rotation.y(),
-                          -target_rotation.z(), -target_rotation.w());
-    }
-    auto smoothed_rotation = previous_rotation.slerp(target_rotation, alpha);
-    smoothed_rotation.normalize();
-    smoothed_fusion_from_tag_frame_ =
-        tf2::Transform(smoothed_rotation, smoothed_translation);
+  // This is the Frobenius-nearest member of
+  // R(yaw) = Rz(yaw) * Rx(-pi / 2).  It uses both horizontal axes instead of
+  // extracting Euler angles from a noisy unconstrained rotation.
+  const double cosine_term = basis[0][0] + basis[1][2];
+  const double sine_term = basis[1][0] - basis[0][2];
+  if (std::isfinite(cosine_term) && std::isfinite(sine_term) &&
+      std::hypot(cosine_term, sine_term) > 1e-9) {
+    return std::atan2(sine_term, cosine_term);
+  }
+  if (!allow_axis_fallback) {
+    return std::nullopt;
   }
 
-  last_smoothed_receipt_time_ = receipt_time;
-  has_smoothed_transform_ = true;
-  return smoothed_fusion_from_tag_frame_;
+  const double x_axis_norm = std::hypot(basis[0][0], basis[1][0]);
+  const double z_axis_norm = std::hypot(basis[0][2], basis[1][2]);
+  if (std::isfinite(x_axis_norm) && x_axis_norm >= z_axis_norm &&
+      x_axis_norm > 1e-9) {
+    return std::atan2(basis[1][0], basis[0][0]);
+  }
+  if (std::isfinite(z_axis_norm) && z_axis_norm > 1e-9) {
+    return std::atan2(-basis[0][2], basis[1][2]);
+  }
+  return std::nullopt;
+}
+
+tf2::Quaternion ApriltagFusionNode::constrainedRotation(double yaw) {
+  tf2::Quaternion result;
+  result.setRPY(-0.5 * kPi, 0.0, yaw);
+  result.normalize();
+  return result;
+}
+
+void ApriltagFusionNode::predictKalmanAxis(KalmanAxisState &state,
+                                           double delta_sec,
+                                           double acceleration_std) {
+  state.position += delta_sec * state.velocity;
+
+  const double delta2 = delta_sec * delta_sec;
+  const double delta3 = delta2 * delta_sec;
+  const double delta4 = delta2 * delta2;
+  const double acceleration_variance = acceleration_std * acceleration_std;
+  const double position_variance =
+      state.position_variance +
+      2.0 * delta_sec * state.position_velocity_covariance +
+      delta2 * state.velocity_variance + 0.25 * delta4 * acceleration_variance;
+  const double position_velocity_covariance =
+      state.position_velocity_covariance + delta_sec * state.velocity_variance +
+      0.5 * delta3 * acceleration_variance;
+  const double velocity_variance =
+      state.velocity_variance + delta2 * acceleration_variance;
+
+  state.position_variance = std::max(0.0, position_variance);
+  state.position_velocity_covariance = position_velocity_covariance;
+  state.velocity_variance = std::max(0.0, velocity_variance);
+}
+
+void ApriltagFusionNode::correctKalmanAxis(KalmanAxisState &state,
+                                           double measurement,
+                                           double measurement_std,
+                                           bool wrap_innovation) {
+  const double measurement_variance = measurement_std * measurement_std;
+  const double innovation_variance =
+      state.position_variance + measurement_variance;
+  if (!std::isfinite(innovation_variance) || innovation_variance <= 0.0) {
+    return;
+  }
+
+  double innovation = measurement - state.position;
+  if (wrap_innovation) {
+    innovation = std::remainder(innovation, 2.0 * kPi);
+  }
+  const double position_gain = state.position_variance / innovation_variance;
+  const double velocity_gain =
+      state.position_velocity_covariance / innovation_variance;
+
+  const double old_position_variance = state.position_variance;
+  const double old_position_velocity_covariance =
+      state.position_velocity_covariance;
+  const double old_velocity_variance = state.velocity_variance;
+  state.position += position_gain * innovation;
+  state.velocity += velocity_gain * innovation;
+
+  // Joseph-form covariance update for H = [1, 0].
+  const double residual_gain = 1.0 - position_gain;
+  state.position_variance =
+      residual_gain * residual_gain * old_position_variance +
+      position_gain * position_gain * measurement_variance;
+  state.position_velocity_covariance =
+      residual_gain * (old_position_velocity_covariance -
+                       velocity_gain * old_position_variance) +
+      position_gain * velocity_gain * measurement_variance;
+  state.velocity_variance =
+      old_velocity_variance -
+      2.0 * velocity_gain * old_position_velocity_covariance +
+      velocity_gain * velocity_gain *
+          (old_position_variance + measurement_variance);
+  state.position_variance = std::max(0.0, state.position_variance);
+  state.velocity_variance = std::max(0.0, state.velocity_variance);
+}
+
+tf2::Transform ApriltagFusionNode::kalmanFilteredTransform() const {
+  return tf2::Transform(constrainedRotation(kalman_axes_[3].position),
+                        tf2::Vector3(kalman_axes_[0].position,
+                                     kalman_axes_[1].position,
+                                     fixed_tag_frame_z_m_));
+}
+
+tf2::Transform ApriltagFusionNode::filterTransform(
+    const tf2::Transform &fusion_from_tag_frame_measurement,
+    const rclcpp::Time &filter_time) {
+  const auto measurement_origin = fusion_from_tag_frame_measurement.getOrigin();
+  const auto measured_yaw = constrainedYaw(
+      fusion_from_tag_frame_measurement.getRotation(), !has_kalman_state_);
+  const double filter_delta_sec =
+      has_kalman_state_ ? (filter_time - last_kalman_filter_time_).seconds()
+                        : 0.0;
+  const bool reset_filter =
+      !has_kalman_state_ || !std::isfinite(filter_delta_sec) ||
+      filter_delta_sec < 0.0 || filter_delta_sec > kalman_reset_sec_;
+
+  if (reset_filter) {
+    const std::array<double, 4> measurements{
+        measurement_origin.x(), measurement_origin.y(), fixed_tag_frame_z_m_,
+        measured_yaw.value_or(has_kalman_state_ ? kalman_axes_[3].position
+                                                : 0.0)};
+    const double position_variance =
+        kalman_position_measurement_std_m_ * kalman_position_measurement_std_m_;
+    const double yaw_measurement_std =
+        kalman_yaw_measurement_std_deg_ / kRadiansToDegrees;
+    const double yaw_variance = yaw_measurement_std * yaw_measurement_std;
+    const double velocity_variance = kalman_initial_linear_velocity_std_mps_ *
+                                     kalman_initial_linear_velocity_std_mps_;
+    const double yaw_rate_std =
+        kalman_initial_yaw_rate_std_degps_ / kRadiansToDegrees;
+    const double yaw_rate_variance = yaw_rate_std * yaw_rate_std;
+    for (std::size_t axis = 0; axis < kalman_axes_.size(); ++axis) {
+      auto &state = kalman_axes_[axis];
+      state.position = measurements[axis];
+      state.velocity = 0.0;
+      state.position_variance =
+          axis == 2 ? 0.0 : (axis < 3 ? position_variance : yaw_variance);
+      state.position_velocity_covariance = 0.0;
+      state.velocity_variance =
+          axis == 2 ? 0.0 : (axis < 3 ? velocity_variance : yaw_rate_variance);
+    }
+  } else {
+    const double yaw_acceleration_std =
+        kalman_yaw_acceleration_std_degps2_ / kRadiansToDegrees;
+    for (std::size_t axis = 0; axis < kalman_axes_.size(); ++axis) {
+      if (axis == 2) {
+        continue;
+      }
+      predictKalmanAxis(kalman_axes_[axis], filter_delta_sec,
+                        axis < 3 ? kalman_linear_acceleration_std_mps2_
+                                 : yaw_acceleration_std);
+    }
+
+    correctKalmanAxis(kalman_axes_[0], measurement_origin.x(),
+                      kalman_position_measurement_std_m_, false);
+    correctKalmanAxis(kalman_axes_[1], measurement_origin.y(),
+                      kalman_position_measurement_std_m_, false);
+    if (measured_yaw) {
+      correctKalmanAxis(kalman_axes_[3], *measured_yaw,
+                        kalman_yaw_measurement_std_deg_ / kRadiansToDegrees,
+                        true);
+    }
+  }
+
+  last_kalman_filter_time_ = filter_time;
+  has_kalman_state_ = true;
+  return kalmanFilteredTransform();
 }
 
 void ApriltagFusionNode::publishResult(
@@ -1786,9 +2109,9 @@ ApriltagFusionNode::estimateTagInCameraFrame(
     const std::vector<cv::Point2f> &corners, const cv::Mat &camera_matrix,
     const cv::Mat &distortion_coeffs, double tag_size_m,
     const DepthFrameView *depth_frame, std::size_t image_width,
-    std::size_t image_height) const {
-  auto pnp_estimate =
-      estimateTagWithPnp(corners, camera_matrix, distortion_coeffs, tag_size_m);
+    std::size_t image_height, const PoseEstimate *pnp_prior) const {
+  auto pnp_estimate = estimateTagWithPnp(
+      corners, camera_matrix, distortion_coeffs, tag_size_m, pnp_prior);
   if (!pnp_estimate) {
     return std::nullopt;
   }
@@ -1803,11 +2126,74 @@ ApriltagFusionNode::estimateTagInCameraFrame(
   return depth_estimate ? depth_estimate : pnp_estimate;
 }
 
+std::optional<std::size_t> ApriltagFusionNode::selectPnpCandidate(
+    const std::vector<cv::Mat> &candidate_rvecs,
+    const std::vector<double> &candidate_squared_errors,
+    const cv::Mat *prior_rvec, double ambiguity_margin_px,
+    std::size_t corner_count) {
+  if (candidate_rvecs.empty() ||
+      candidate_rvecs.size() != candidate_squared_errors.size() ||
+      !std::isfinite(ambiguity_margin_px) || ambiguity_margin_px < 0.0 ||
+      corner_count == 0) {
+    return std::nullopt;
+  }
+
+  std::optional<std::size_t> best_index;
+  for (std::size_t index = 0; index < candidate_squared_errors.size();
+       ++index) {
+    if (!std::isfinite(candidate_squared_errors[index])) {
+      continue;
+    }
+    if (!best_index || candidate_squared_errors[index] <
+                           candidate_squared_errors[*best_index]) {
+      best_index = index;
+    }
+  }
+  if (!best_index || prior_rvec == nullptr || prior_rvec->empty() ||
+      prior_rvec->total() < 3) {
+    return best_index;
+  }
+
+  cv::Mat prior_rotation;
+  cv::Rodrigues(*prior_rvec, prior_rotation);
+  const double best_rmse =
+      std::sqrt(candidate_squared_errors[*best_index] / corner_count);
+  std::optional<std::size_t> closest_index;
+  double closest_rotation_delta_deg = std::numeric_limits<double>::infinity();
+  for (std::size_t index = 0; index < candidate_rvecs.size(); ++index) {
+    const double squared_error = candidate_squared_errors[index];
+    if (!std::isfinite(squared_error) ||
+        std::sqrt(squared_error / corner_count) >
+            best_rmse + ambiguity_margin_px) {
+      continue;
+    }
+
+    cv::Mat candidate_rotation;
+    cv::Rodrigues(candidate_rvecs[index], candidate_rotation);
+    const cv::Mat rotation_delta = candidate_rotation * prior_rotation.t();
+    const double rotation_trace = rotation_delta.at<double>(0, 0) +
+                                  rotation_delta.at<double>(1, 1) +
+                                  rotation_delta.at<double>(2, 2);
+    const double rotation_delta_deg =
+        std::acos(std::clamp((rotation_trace - 1.0) * 0.5, -1.0, 1.0)) *
+        kRadiansToDegrees;
+    if (!closest_index ||
+        rotation_delta_deg < closest_rotation_delta_deg - 1e-12 ||
+        (std::abs(rotation_delta_deg - closest_rotation_delta_deg) <= 1e-12 &&
+         squared_error < candidate_squared_errors[*closest_index])) {
+      closest_index = index;
+      closest_rotation_delta_deg = rotation_delta_deg;
+    }
+  }
+  return closest_index ? closest_index : best_index;
+}
+
 std::optional<ApriltagFusionNode::PoseEstimate>
 ApriltagFusionNode::estimateTagWithPnp(const std::vector<cv::Point2f> &corners,
                                        const cv::Mat &camera_matrix,
                                        const cv::Mat &distortion_coeffs,
-                                       double tag_size_m) const {
+                                       double tag_size_m,
+                                       const PoseEstimate *pnp_prior) const {
   if (corners.size() != 4) {
     return std::nullopt;
   }
@@ -1846,16 +2232,26 @@ ApriltagFusionNode::estimateTagWithPnp(const std::vector<cv::Point2f> &corners,
   cv::solvePnPGeneric(object_points, corners, camera_matrix, distortion_coeffs,
                       candidate_rvecs, candidate_tvecs, false,
                       cv::SOLVEPNP_IPPE);
+  std::vector<double> candidate_squared_errors(
+      candidate_rvecs.size(), std::numeric_limits<double>::infinity());
   for (std::size_t index = 0;
        index < candidate_rvecs.size() && index < candidate_tvecs.size();
        ++index) {
     const auto error =
         candidateSquaredError(candidate_rvecs[index], candidate_tvecs[index]);
-    if (error && *error < squared_error_sum) {
-      squared_error_sum = *error;
-      rvec = candidate_rvecs[index].clone();
-      tvec = candidate_tvecs[index].clone();
+    if (error) {
+      candidate_squared_errors[index] = *error;
     }
+  }
+  const cv::Mat *prior_rvec =
+      pnp_prior && !pnp_prior->rvec.empty() ? &pnp_prior->rvec : nullptr;
+  const auto selected_candidate =
+      selectPnpCandidate(candidate_rvecs, candidate_squared_errors, prior_rvec,
+                         pnp_ambiguity_reprojection_margin_px_, corners.size());
+  if (selected_candidate && *selected_candidate < candidate_tvecs.size()) {
+    squared_error_sum = candidate_squared_errors[*selected_candidate];
+    rvec = candidate_rvecs[*selected_candidate].clone();
+    tvec = candidate_tvecs[*selected_candidate].clone();
   }
 
   if (rvec.empty()) {
@@ -2264,22 +2660,46 @@ ApriltagFusionNode::estimateTagWithDepth(
   cv::Rodrigues(pnp_estimate.rvec, pnp_rotation);
   const cv::Mat translation_delta = translation_optical - pnp_estimate.tvec;
   const double pnp_translation_delta = cv::norm(translation_delta);
-  const cv::Mat rotation_delta = rotation_optical * pnp_rotation.t();
-  const double rotation_trace = rotation_delta.at<double>(0, 0) +
-                                rotation_delta.at<double>(1, 1) +
-                                rotation_delta.at<double>(2, 2);
+  const cv::Vec3d pnp_normal(pnp_rotation.at<double>(0, 2),
+                             pnp_rotation.at<double>(1, 2),
+                             pnp_rotation.at<double>(2, 2));
+  const cv::Vec3d depth_normal(rotation_optical.at<double>(0, 2),
+                               rotation_optical.at<double>(1, 2),
+                               rotation_optical.at<double>(2, 2));
   const double pnp_rotation_delta =
-      std::acos(std::clamp((rotation_trace - 1.0) * 0.5, -1.0, 1.0)) *
+      std::acos(std::clamp(std::abs(pnp_normal.dot(depth_normal)), 0.0, 1.0)) *
       kRadiansToDegrees;
   if (!std::isfinite(pnp_translation_delta) ||
-      pnp_translation_delta > depth_max_pnp_translation_delta_m_ ||
-      !std::isfinite(pnp_rotation_delta) ||
-      pnp_rotation_delta > depth_max_pnp_rotation_delta_deg_) {
+      !std::isfinite(pnp_rotation_delta)) {
     return std::nullopt;
   }
 
+  const auto quaternionFromRotationMatrix = [](const cv::Mat &rotation) {
+    tf2::Matrix3x3 basis(rotation.at<double>(0, 0), rotation.at<double>(0, 1),
+                         rotation.at<double>(0, 2), rotation.at<double>(1, 0),
+                         rotation.at<double>(1, 1), rotation.at<double>(1, 2),
+                         rotation.at<double>(2, 0), rotation.at<double>(2, 1),
+                         rotation.at<double>(2, 2));
+    tf2::Quaternion quaternion;
+    basis.getRotation(quaternion);
+    quaternion.normalize();
+    return quaternion;
+  };
+  const auto rotationMatrixFromQuaternion = [](const tf2::Quaternion &value) {
+    const tf2::Matrix3x3 basis(value);
+    cv::Mat result = (cv::Mat_<double>(3, 3) << basis[0][0], basis[0][1],
+                      basis[0][2], basis[1][0], basis[1][1], basis[1][2],
+                      basis[2][0], basis[2][1], basis[2][2]);
+    return result;
+  };
+  const auto pnp_quaternion = quaternionFromRotationMatrix(pnp_rotation);
+  const auto depth_quaternion = quaternionFromRotationMatrix(rotation_optical);
+  const auto full_depth_normal_quaternion =
+      blendTagNormal(pnp_quaternion, depth_quaternion, 1.0);
+  const auto full_depth_normal_rotation =
+      rotationMatrixFromQuaternion(full_depth_normal_quaternion);
   cv::Mat depth_rvec;
-  cv::Rodrigues(rotation_optical, depth_rvec);
+  cv::Rodrigues(full_depth_normal_rotation, depth_rvec);
   std::vector<cv::Point2f> depth_projected_points;
   cv::projectPoints(object_points, depth_rvec, translation_optical,
                     camera_matrix, distortion_coeffs, depth_projected_points);
@@ -2308,52 +2728,34 @@ ApriltagFusionNode::estimateTagWithDepth(
   const double depth_confidence = std::clamp(plane->valid_fraction, 0.0, 1.0) *
                                   std::clamp(inlier_fraction, 0.0, 1.0) *
                                   plane_score * size_score;
-  const double safety_weight = std::min(
-      {upperLimitBlendWeight(pnp_translation_delta,
-                             depth_max_pnp_translation_delta_m_),
-       upperLimitBlendWeight(pnp_rotation_delta,
-                             depth_max_pnp_rotation_delta_deg_),
-       upperLimitBlendWeight(depth_reprojection_rmse,
+  const double common_safety_weight = std::min(
+      {upperLimitBlendWeight(depth_reprojection_rmse,
                              max_reprojection_rmse_px_),
        lowerLimitBlendWeight(static_cast<double>(plane->inlier_samples),
                              static_cast<double>(depth_min_valid_samples_)),
        lowerLimitBlendWeight(plane->valid_fraction,
                              depth_min_valid_fraction_)});
-  const double blend_weight =
-      std::clamp(depth_confidence * safety_weight, 0.0, 1.0);
-  if (blend_weight <= 1e-6) {
+  const double translation_blend_weight =
+      std::clamp(depth_confidence * common_safety_weight *
+                     upperLimitBlendWeight(pnp_translation_delta,
+                                           depth_max_pnp_translation_delta_m_),
+                 0.0, 1.0);
+  const double rotation_blend_weight =
+      std::clamp(depth_confidence * common_safety_weight *
+                     upperLimitBlendWeight(pnp_rotation_delta,
+                                           depth_max_pnp_rotation_delta_deg_),
+                 0.0, 1.0);
+  if (translation_blend_weight <= 1e-6 && rotation_blend_weight <= 1e-6) {
     return std::nullopt;
   }
 
-  const auto quaternionFromRotationMatrix = [](const cv::Mat &rotation) {
-    tf2::Matrix3x3 basis(rotation.at<double>(0, 0), rotation.at<double>(0, 1),
-                         rotation.at<double>(0, 2), rotation.at<double>(1, 0),
-                         rotation.at<double>(1, 1), rotation.at<double>(1, 2),
-                         rotation.at<double>(2, 0), rotation.at<double>(2, 1),
-                         rotation.at<double>(2, 2));
-    tf2::Quaternion quaternion;
-    basis.getRotation(quaternion);
-    quaternion.normalize();
-    return quaternion;
-  };
-  auto pnp_quaternion = quaternionFromRotationMatrix(pnp_rotation);
-  auto depth_quaternion = quaternionFromRotationMatrix(rotation_optical);
-  if (pnp_quaternion.dot(depth_quaternion) < 0.0) {
-    depth_quaternion =
-        tf2::Quaternion(-depth_quaternion.x(), -depth_quaternion.y(),
-                        -depth_quaternion.z(), -depth_quaternion.w());
-  }
-  auto blended_quaternion =
-      pnp_quaternion.slerp(depth_quaternion, blend_weight);
-  blended_quaternion.normalize();
-  const tf2::Matrix3x3 blended_basis(blended_quaternion);
-  cv::Mat blended_rotation =
-      (cv::Mat_<double>(3, 3) << blended_basis[0][0], blended_basis[0][1],
-       blended_basis[0][2], blended_basis[1][0], blended_basis[1][1],
-       blended_basis[1][2], blended_basis[2][0], blended_basis[2][1],
-       blended_basis[2][2]);
-  const cv::Mat blended_translation = pnp_estimate.tvec * (1.0 - blend_weight) +
-                                      translation_optical * blend_weight;
+  const auto blended_quaternion =
+      blendTagNormal(pnp_quaternion, depth_quaternion, rotation_blend_weight);
+  const auto blended_rotation =
+      rotationMatrixFromQuaternion(blended_quaternion);
+  const cv::Mat blended_translation =
+      pnp_estimate.tvec * (1.0 - translation_blend_weight) +
+      translation_optical * translation_blend_weight;
 
   cv::Mat rvec;
   cv::Rodrigues(blended_rotation, rvec);
@@ -2401,8 +2803,10 @@ ApriltagFusionNode::estimateTagWithDepth(
   estimate.depth_size_error_fraction = max_size_error_fraction;
   estimate.depth_pnp_translation_delta_m = pnp_translation_delta;
   estimate.depth_pnp_rotation_delta_deg = pnp_rotation_delta;
-  estimate.depth_blend_weight = blend_weight;
-  estimate.estimator_weight = 1.0 + 2.0 * blend_weight;
+  estimate.depth_blend_weight = translation_blend_weight;
+  estimate.depth_rotation_blend_weight = rotation_blend_weight;
+  estimate.estimator_weight =
+      1.0 + translation_blend_weight + rotation_blend_weight;
   return estimate;
 }
 

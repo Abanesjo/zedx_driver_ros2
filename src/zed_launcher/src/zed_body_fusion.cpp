@@ -140,6 +140,28 @@ std::string fusionErrorToString(sl::FUSION_ERROR_CODE code) {
   return out.str();
 }
 
+double downwardTiltDegrees(const sl::Transform &pose) {
+  const auto orientation = pose.getOrientation();
+  const double quaternion_norm =
+      std::sqrt(static_cast<double>(orientation.x) * orientation.x +
+                static_cast<double>(orientation.y) * orientation.y +
+                static_cast<double>(orientation.z) * orientation.z +
+                static_cast<double>(orientation.w) * orientation.w);
+  if (!std::isfinite(quaternion_norm) || quaternion_norm <= 0.0) {
+    return std::numeric_limits<double>::quiet_NaN();
+  }
+
+  const double x = orientation.x / quaternion_norm;
+  const double y = orientation.y / quaternion_norm;
+  const double z = orientation.z / quaternion_norm;
+  const double w = orientation.w / quaternion_norm;
+  const double forward_x = 1.0 - 2.0 * (y * y + z * z);
+  const double forward_y = 2.0 * (x * y + w * z);
+  const double forward_z = 2.0 * (x * z - w * y);
+  return -std::atan2(forward_z, std::hypot(forward_x, forward_y)) * 180.0 /
+         std::acos(-1.0);
+}
+
 template <typename RosArray, typename SlVector>
 void copyVector3(RosArray &dest, const SlVector &src) {
   const auto count = std::min<size_t>(dest.size(), 3);
@@ -223,7 +245,6 @@ ZedBodyFusionNode::ZedBodyFusionNode(const rclcpp::NodeOptions &options,
   validateFusionConfigurations();
 
   configureRuntimeParameters();
-  publishStaticCameraTransforms();
 
   try {
     startCameraPublishers();
@@ -483,14 +504,14 @@ ZedBodyFusionNode::imageFrameForCamera(const std::string &camera_name) const {
 
 geometry_msgs::msg::TransformStamped
 ZedBodyFusionNode::staticCameraTransformForConfig(
-    const sl::FusionConfiguration &config) {
+    const sl::FusionConfiguration &config, const sl::Transform &absolute_pose) {
   geometry_msgs::msg::TransformStamped transform;
   transform.header.stamp = now();
   transform.header.frame_id = publish_frame_id_;
   transform.child_frame_id = imageFrameForCamera(cameraNameForConfig(config));
 
-  const auto translation = config.pose.getTranslation();
-  const auto orientation = config.pose.getOrientation();
+  const auto translation = absolute_pose.getTranslation();
+  const auto orientation = absolute_pose.getOrientation();
   transform.transform.translation.x = static_cast<double>(translation.x);
   transform.transform.translation.y = static_cast<double>(translation.y);
   transform.transform.translation.z = static_cast<double>(translation.z);
@@ -502,20 +523,125 @@ ZedBodyFusionNode::staticCameraTransformForConfig(
   return transform;
 }
 
-void ZedBodyFusionNode::publishStaticCameraTransforms() {
+bool ZedBodyFusionNode::publishStaticCameraTransforms() {
   std::vector<geometry_msgs::msg::TransformStamped> transforms;
+  std::vector<double> downward_tilts_deg;
   transforms.reserve(fusion_configs_.size());
+  downward_tilts_deg.reserve(fusion_configs_.size());
 
   for (const auto &config : fusion_configs_) {
-    auto transform = staticCameraTransformForConfig(config);
-    RCLCPP_INFO(
-        get_logger(), "Publishing static camera TF %s -> %s for serial %u",
-        transform.header.frame_id.c_str(), transform.child_frame_id.c_str(),
-        static_cast<unsigned int>(config.serial_number));
+    sl::Transform absolute_pose = config.pose;
+    if (!config.override_gravity) {
+      const auto worker = std::find_if(
+          workers_.begin(), workers_.end(), [&config](const auto &candidate) {
+            return candidate->serial_number ==
+                   static_cast<unsigned int>(config.serial_number);
+          });
+      if (worker == workers_.end()) {
+        RCLCPP_ERROR(get_logger(),
+                     "No camera worker exists for calibration serial %u",
+                     static_cast<unsigned int>(config.serial_number));
+        return false;
+      }
+
+      std::array<double, 4> gravity_quaternion;
+      bool has_gravity_pose = false;
+      {
+        std::lock_guard<std::mutex> lock((*worker)->gravity_pose_mutex);
+        gravity_quaternion = (*worker)->gravity_quaternion;
+        has_gravity_pose = (*worker)->has_gravity_pose;
+      }
+      if (!has_gravity_pose) {
+        RCLCPP_WARN_THROTTLE(
+            get_logger(), *get_clock(), 2000,
+            "Waiting for gravity-aligned SDK pose for camera serial %u",
+            static_cast<unsigned int>(config.serial_number));
+        return false;
+      }
+
+      const double quaternion_norm =
+          std::sqrt(gravity_quaternion[0] * gravity_quaternion[0] +
+                    gravity_quaternion[1] * gravity_quaternion[1] +
+                    gravity_quaternion[2] * gravity_quaternion[2] +
+                    gravity_quaternion[3] * gravity_quaternion[3]);
+      if (!std::isfinite(quaternion_norm) || quaternion_norm <= 0.0) {
+        RCLCPP_ERROR(get_logger(),
+                     "Invalid SDK gravity rotation for camera serial %u",
+                     static_cast<unsigned int>(config.serial_number));
+        return false;
+      }
+
+      sl::Orientation gravity_orientation;
+      gravity_orientation.x =
+          static_cast<float>(gravity_quaternion[0] / quaternion_norm);
+      gravity_orientation.y =
+          static_cast<float>(gravity_quaternion[1] / quaternion_norm);
+      gravity_orientation.z =
+          static_cast<float>(gravity_quaternion[2] / quaternion_norm);
+      gravity_orientation.w =
+          static_cast<float>(gravity_quaternion[3] / quaternion_norm);
+      sl::Transform gravity_rotation;
+      gravity_rotation.setIdentity();
+      gravity_rotation.setOrientation(gravity_orientation);
+      absolute_pose = config.pose * gravity_rotation;
+    }
+
+    auto transform = staticCameraTransformForConfig(config, absolute_pose);
+    downward_tilts_deg.push_back(downwardTiltDegrees(absolute_pose));
     transforms.push_back(std::move(transform));
   }
 
+  for (std::size_t index = 0; index < transforms.size(); ++index) {
+    const auto &config = fusion_configs_[index];
+    const auto &transform = transforms[index];
+    RCLCPP_INFO(
+        get_logger(),
+        "Publishing SDK-resolved static camera TF %s -> %s for serial %u: "
+        "position [%.3f, %.3f, %.3f] m, downward tilt %.3f deg",
+        transform.header.frame_id.c_str(), transform.child_frame_id.c_str(),
+        static_cast<unsigned int>(config.serial_number),
+        transform.transform.translation.x, transform.transform.translation.y,
+        transform.transform.translation.z, downward_tilts_deg[index]);
+  }
+
   static_tf_broadcaster_->sendTransform(transforms);
+  return true;
+}
+
+void ZedBodyFusionNode::updateCameraGravityRotation(CameraWorker &worker) {
+  {
+    std::lock_guard<std::mutex> lock(worker.gravity_pose_mutex);
+    if (worker.has_gravity_pose) {
+      return;
+    }
+  }
+
+  sl::Pose gravity_pose;
+  const auto tracking_state =
+      worker.camera.getPosition(gravity_pose, sl::REFERENCE_FRAME::WORLD);
+  if (tracking_state != sl::POSITIONAL_TRACKING_STATE::OK) {
+    return;
+  }
+
+  const auto orientation = gravity_pose.getOrientation();
+  const double quaternion_norm =
+      std::sqrt(static_cast<double>(orientation.x) * orientation.x +
+                static_cast<double>(orientation.y) * orientation.y +
+                static_cast<double>(orientation.z) * orientation.z +
+                static_cast<double>(orientation.w) * orientation.w);
+  if (!std::isfinite(quaternion_norm) || quaternion_norm <= 0.0) {
+    return;
+  }
+
+  const std::array<double, 4> quaternion{
+      orientation.x / quaternion_norm, orientation.y / quaternion_norm,
+      orientation.z / quaternion_norm, orientation.w / quaternion_norm};
+  std::lock_guard<std::mutex> lock(worker.gravity_pose_mutex);
+  if (worker.has_gravity_pose) {
+    return;
+  }
+  worker.gravity_quaternion = quaternion;
+  worker.has_gravity_pose = true;
 }
 
 sensor_msgs::msg::CameraInfo
@@ -1086,6 +1212,7 @@ void ZedBodyFusionNode::runCameraWorker(CameraWorker &worker) {
                            worker.serial_number, zedErrorToString(err).c_str());
       std::this_thread::sleep_for(std::chrono::milliseconds(2));
     } else {
+      updateCameraGravityRotation(worker);
       publishImage(worker, steady_clock);
     }
   }
@@ -1101,6 +1228,10 @@ void ZedBodyFusionNode::processFusion() {
                          "Fusion process failed: %s",
                          fusionErrorToString(fusion_err).c_str());
     return;
+  }
+
+  if (!camera_transforms_published_) {
+    camera_transforms_published_ = publishStaticCameraTransforms();
   }
 
   sl::Bodies bodies;

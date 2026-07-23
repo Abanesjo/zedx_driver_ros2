@@ -5,11 +5,13 @@
 #include <sl/Camera.hpp>
 #include <sl/Fusion.hpp>
 
+#include <array>
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <vector>
@@ -60,6 +62,9 @@ private:
     std::string camera_name;
     std::string image_frame_id;
     unsigned int serial_number = 0;
+    std::mutex gravity_pose_mutex;
+    std::array<double, 4> gravity_quaternion{};
+    bool has_gravity_pose = false;
   };
 
   void loadParameters();
@@ -82,9 +87,12 @@ private:
   std::string imageFrameForCamera(const std::string &camera_name) const;
 
   geometry_msgs::msg::TransformStamped
-  staticCameraTransformForConfig(const sl::FusionConfiguration &config);
+  staticCameraTransformForConfig(const sl::FusionConfiguration &config,
+                                 const sl::Transform &absolute_pose);
 
-  void publishStaticCameraTransforms();
+  bool publishStaticCameraTransforms();
+
+  void updateCameraGravityRotation(CameraWorker &worker);
 
   sensor_msgs::msg::CameraInfo
   makeCameraInfo(sl::Camera &camera, const std::string &frame_id) const;
@@ -247,6 +255,8 @@ private:
   rclcpp::TimerBase::SharedPtr fusion_timer_;
 
   std::unique_ptr<tf2_ros::StaticTransformBroadcaster> static_tf_broadcaster_;
+
+  bool camera_transforms_published_ = false;
 
   std::atomic_bool shutting_down_{false};
 };
