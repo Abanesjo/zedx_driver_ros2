@@ -144,6 +144,114 @@ double wrapAngle(double angle) {
   return std::atan2(std::sin(angle), std::cos(angle));
 }
 
+SkeletonBodyFormat decodeBodyFormat(int body_format) {
+  switch (body_format) {
+  case 0:
+  case 18:
+    return SkeletonBodyFormat::Body18;
+  case 1:
+  case 34:
+    return SkeletonBodyFormat::Body34;
+  case 2:
+  case 38:
+    return SkeletonBodyFormat::Body38;
+  default:
+    return SkeletonBodyFormat::Unsupported;
+  }
+}
+
+std::size_t bodyFormatKeypointCount(SkeletonBodyFormat body_format) {
+  switch (body_format) {
+  case SkeletonBodyFormat::Body18:
+    return 18;
+  case SkeletonBodyFormat::Body34:
+    return 34;
+  case SkeletonBodyFormat::Body38:
+    return 38;
+  case SkeletonBodyFormat::Unsupported:
+    return 0;
+  }
+  return 0;
+}
+
+bool bodyFormatSupportsCapsules(int body_format) {
+  return decodeBodyFormat(body_format) != SkeletonBodyFormat::Unsupported;
+}
+
+bool bodyFormatSupportsJointAngles(int body_format) {
+  return decodeBodyFormat(body_format) == SkeletonBodyFormat::Body38;
+}
+
+BodyPoints canonicalBodyPoints(const Object &obj) {
+  BodyPoints points{};
+
+  auto copy = [&](int destination, int source) {
+    if (source < 0 ||
+        static_cast<std::size_t>(source) >=
+            obj.skeleton_3d.keypoints.size()) {
+      return;
+    }
+    const auto &kp = obj.skeleton_3d.keypoints[source].kp;
+    const Vec3 point{static_cast<double>(kp[0]), static_cast<double>(kp[1]),
+                     static_cast<double>(kp[2])};
+    if (validPoint(point)) {
+      points[destination] = point;
+    }
+  };
+
+  switch (decodeBodyFormat(obj.body_format)) {
+  case SkeletonBodyFormat::Body18:
+    // BODY_18 has no pelvis joint. All canonical segments remain the same;
+    // the midpoint of the two tracked hips is the anatomical pelvis proxy.
+    copy(kNeck, 1);
+    copy(kRightShoulder, 2);
+    copy(kRightElbow, 3);
+    copy(kRightWrist, 4);
+    copy(kLeftShoulder, 5);
+    copy(kLeftElbow, 6);
+    copy(kLeftWrist, 7);
+    copy(kRightHip, 8);
+    copy(kRightKnee, 9);
+    copy(kRightAnkle, 10);
+    copy(kLeftHip, 11);
+    copy(kLeftKnee, 12);
+    copy(kLeftAnkle, 13);
+    if (validPoint(points[kLeftHip]) && validPoint(points[kRightHip])) {
+      points[kPelvis] =
+          0.5 * (*points[kLeftHip] + *points[kRightHip]);
+    }
+    break;
+
+  case SkeletonBodyFormat::Body34:
+    copy(kPelvis, 0);
+    copy(kNeck, 3);
+    copy(kLeftShoulder, 5);
+    copy(kLeftElbow, 6);
+    copy(kLeftWrist, 7);
+    copy(kRightShoulder, 12);
+    copy(kRightElbow, 13);
+    copy(kRightWrist, 14);
+    copy(kLeftHip, 18);
+    copy(kLeftKnee, 19);
+    copy(kLeftAnkle, 20);
+    copy(kRightHip, 22);
+    copy(kRightKnee, 23);
+    copy(kRightAnkle, 24);
+    break;
+
+  case SkeletonBodyFormat::Body38:
+    for (std::size_t index = 0; index < kNumBody38Points; ++index) {
+      copy(static_cast<int>(index), static_cast<int>(index));
+    }
+    break;
+
+  case SkeletonBodyFormat::Unsupported:
+    break;
+  }
+
+  return points;
+}
+
 JointAngles estimateJointAngles(const BodyPoints &points) {
   JointAngles result;
   auto set = [&](std::size_t index, double value) {
@@ -275,6 +383,70 @@ std::vector<CapsuleData> buildBodyCapsules(const BodyPoints &points,
   return capsules;
 }
 
+CapsuleAnatomyFilter::CapsuleAnatomyFilter(double max_length_change_fraction)
+    : max_length_change_fraction_(max_length_change_fraction) {
+  if (!std::isfinite(max_length_change_fraction_) ||
+      max_length_change_fraction_ < 0.0 || max_length_change_fraction_ > 1.0) {
+    throw std::invalid_argument(
+        "Capsule max length change fraction must be in [0, 1]");
+  }
+}
+
+std::vector<CapsuleData>
+CapsuleAnatomyFilter::update(const std::vector<CapsuleData> &candidates) {
+  std::vector<CapsuleData> filtered;
+  filtered.reserve(candidates.size());
+  for (const auto &candidate : candidates) {
+    const auto previous = previous_.find(candidate.name);
+    if (plausible(candidate)) {
+      previous_[candidate.name] = candidate;
+      filtered.push_back(candidate);
+    } else if (previous != previous_.end()) {
+      filtered.push_back(previous->second);
+    }
+  }
+  return filtered;
+}
+
+void CapsuleAnatomyFilter::reset() { previous_.clear(); }
+
+bool CapsuleAnatomyFilter::plausible(const CapsuleData &candidate) const {
+  const double length = norm(candidate.a - candidate.b);
+  if (!std::isfinite(length)) {
+    return false;
+  }
+
+  double minimum_length = 0.05;
+  double maximum_length = 1.0;
+  if (candidate.name == "torso") {
+    minimum_length = 0.20;
+  } else if (candidate.name == "left_arm" || candidate.name == "right_arm" ||
+             candidate.name == "left_shoulder" ||
+             candidate.name == "right_shoulder") {
+    minimum_length = 0.08;
+    maximum_length = 0.65;
+  } else if (candidate.name == "left_thigh" ||
+             candidate.name == "right_thigh" || candidate.name == "left_shin" ||
+             candidate.name == "right_shin") {
+    minimum_length = 0.12;
+    maximum_length = 0.90;
+  }
+  if (length < minimum_length || length > maximum_length) {
+    return false;
+  }
+
+  const auto previous = previous_.find(candidate.name);
+  if (previous == previous_.end()) {
+    return true;
+  }
+  const double previous_length = norm(previous->second.a - previous->second.b);
+  const double minimum_change =
+      previous_length * (1.0 - max_length_change_fraction_);
+  const double maximum_change =
+      previous_length * (1.0 + max_length_change_fraction_);
+  return length >= minimum_change && length <= maximum_change;
+}
+
 bool hasUsableObservation(const JointAngles &angles,
                           const std::vector<CapsuleData> &capsules) {
   if (!capsules.empty()) {
@@ -323,6 +495,31 @@ Vec3 EMAJumpFilter::update(const Vec3 &x) {
   last_rejected_.reset();
   value_ = x * alpha_ + *value_ * (1.0 - alpha_);
   return *value_;
+}
+
+void EMAJumpFilter::reset() {
+  value_.reset();
+  reject_count_ = 0;
+  last_rejected_.reset();
+}
+
+bool shouldResetPointFilters(
+    const std::optional<int> &previous_body_id,
+    const std::optional<int64_t> &previous_observation_ns, int current_body_id,
+    int64_t current_observation_ns, double reset_gap_sec) {
+  if (previous_body_id && *previous_body_id != current_body_id) {
+    return true;
+  }
+  if (!previous_observation_ns) {
+    return false;
+  }
+  if (current_observation_ns < *previous_observation_ns) {
+    return true;
+  }
+  return static_cast<double>(current_observation_ns -
+                             *previous_observation_ns) *
+             1e-9 >
+         reset_gap_sec;
 }
 
 AngleFilter::AngleFilter(double alpha, double max_rate_deg)
@@ -383,13 +580,17 @@ HumanMappingNode::HumanMappingNode() : Node("human_mapping_node") {
   publish_rate_hz_ = declare_parameter<double>("publish_rate_hz", 30.0);
   stale_timeout_sec_ = declare_parameter<double>("stale_timeout_sec", 0.5);
   min_confidence_ = declare_parameter<double>("min_confidence", 70.0);
-  require_body_38_ = declare_parameter<bool>("require_body_38", true);
+  require_body_38_ = declare_parameter<bool>("require_body_38", false);
 
   const double point_alpha = declare_parameter<double>("point_ema_alpha", 0.30);
   const double point_max_jump =
       declare_parameter<double>("point_max_jump", 0.6);
   const int point_max_reject_count =
       declare_parameter<int>("point_max_reject_count", 3);
+  point_filter_reset_gap_sec_ =
+      declare_parameter<double>("point_filter_reset_gap_sec", 0.5);
+  const double capsule_max_length_change_fraction =
+      declare_parameter<double>("capsule_max_length_change_fraction", 0.5);
   const double angle_alpha = declare_parameter<double>("angle_ema_alpha", 0.25);
   const double angle_max_rate_deg =
       declare_parameter<double>("angle_max_rate_deg", 100.0);
@@ -442,11 +643,18 @@ HumanMappingNode::HumanMappingNode() : Node("human_mapping_node") {
   if (publish_rate_hz_ <= 0.0) {
     throw std::runtime_error("Parameter 'publish_rate_hz' must be positive");
   }
+  if (!std::isfinite(point_filter_reset_gap_sec_) ||
+      point_filter_reset_gap_sec_ <= 0.0) {
+    throw std::runtime_error(
+        "Parameter 'point_filter_reset_gap_sec' must be finite and positive");
+  }
 
   for (std::size_t i = 0; i < kNumBody38Points; ++i) {
     point_filters_.emplace_back(point_alpha, point_max_jump,
                                 point_max_reject_count);
   }
+  capsule_filter_ = std::make_unique<CapsuleAnatomyFilter>(
+      capsule_max_length_change_fraction);
   angle_filter_ =
       std::make_unique<AngleFilter>(angle_alpha, angle_max_rate_deg);
 
@@ -488,17 +696,25 @@ void HumanMappingNode::skeletonCallback(const ObjectsStamped::SharedPtr msg) {
     return;
   }
 
+  const int64_t now_ns = now().nanoseconds();
+  preparePointFilters(obj->label_id, now_ns);
   const auto points = filteredPoints(*obj);
-  const auto raw_angles = estimateJointAngles(points);
-  auto capsules = buildCapsules(points);
+  JointAngles raw_angles;
+  const bool estimate_angles = bodyFormatSupportsJointAngles(obj->body_format);
+  if (estimate_angles) {
+    raw_angles = estimateJointAngles(points);
+  }
+  auto capsules = capsule_filter_->update(buildCapsules(points));
   if (!hasUsableObservation(raw_angles, capsules)) {
     return;
   }
 
-  const int64_t now_ns = now().nanoseconds();
-  const double angle_dt = angleDt(now_ns);
-  const auto filtered_angles = angle_filter_->update(raw_angles, angle_dt);
-  const auto delta = neutralDelta(filtered_angles, now_ns);
+  std::array<double, kNumJoints> delta{};
+  if (estimate_angles) {
+    const double angle_dt = angleDt(now_ns);
+    const auto filtered_angles = angle_filter_->update(raw_angles, angle_dt);
+    delta = neutralDelta(filtered_angles, now_ns);
+  }
 
   std::array<double, kNumJoints> q_des{};
   for (std::size_t i = 0; i < kNumJoints; ++i) {
@@ -521,15 +737,17 @@ const Object *HumanMappingNode::selectBody(const ObjectsStamped &msg) {
     if (!obj.skeleton_available) {
       continue;
     }
-    if (require_body_38_ && !isBody38(obj.body_format)) {
-      warnBodyFormat(obj.body_format);
+    const auto body_format = decodeBodyFormat(obj.body_format);
+    if (body_format == SkeletonBodyFormat::Unsupported ||
+        (require_body_38_ && body_format != SkeletonBodyFormat::Body38)) {
+      warnRejectedBodyFormat(obj.body_format);
       continue;
     }
     if (static_cast<double>(obj.confidence) < min_confidence_) {
       continue;
     }
-    if (obj.skeleton_3d.keypoints.size() <=
-        static_cast<std::size_t>(kRightAnkle)) {
+    if (obj.skeleton_3d.keypoints.size() <
+        bodyFormatKeypointCount(body_format)) {
       continue;
     }
     if (static_cast<double>(obj.confidence) > best_confidence) {
@@ -540,32 +758,47 @@ const Object *HumanMappingNode::selectBody(const ObjectsStamped &msg) {
   return best;
 }
 
-bool HumanMappingNode::isBody38(int body_format) const {
-  return body_format == 2 || body_format == 38;
-}
-
-void HumanMappingNode::warnBodyFormat(int body_format) {
+void HumanMappingNode::warnRejectedBodyFormat(int body_format) {
   const int64_t now_ns = now().nanoseconds();
   if (now_ns - last_body_format_warn_ns_ < 2'000'000'000LL) {
     return;
   }
   last_body_format_warn_ns_ = now_ns;
-  RCLCPP_WARN(get_logger(),
-              "Ignoring skeleton with body_format=%d; BODY_38 is required.",
-              body_format);
+  if (bodyFormatSupportsCapsules(body_format)) {
+    RCLCPP_WARN(
+        get_logger(),
+        "Ignoring skeleton with body_format=%d because require_body_38=true.",
+        body_format);
+  } else {
+    RCLCPP_WARN(get_logger(),
+                "Ignoring skeleton with unsupported body_format=%d.",
+                body_format);
+  }
 }
 
 BodyPoints HumanMappingNode::filteredPoints(const Object &obj) {
+  const BodyPoints raw_points = canonicalBodyPoints(obj);
   BodyPoints points{};
   for (std::size_t idx = 0; idx < kNumBody38Points; ++idx) {
-    const auto &kp = obj.skeleton_3d.keypoints[idx].kp;
-    const Vec3 p{static_cast<double>(kp[0]), static_cast<double>(kp[1]),
-                 static_cast<double>(kp[2])};
-    if (validPoint(p)) {
-      points[idx] = point_filters_[idx].update(p);
+    if (validPoint(raw_points[idx])) {
+      points[idx] = point_filters_[idx].update(*raw_points[idx]);
     }
   }
   return points;
+}
+
+void HumanMappingNode::preparePointFilters(int body_id,
+                                           int64_t observation_ns) {
+  if (shouldResetPointFilters(filtered_body_id_, last_point_observation_ns_,
+                              body_id, observation_ns,
+                              point_filter_reset_gap_sec_)) {
+    for (auto &filter : point_filters_) {
+      filter.reset();
+    }
+    capsule_filter_->reset();
+  }
+  filtered_body_id_ = body_id;
+  last_point_observation_ns_ = observation_ns;
 }
 
 double HumanMappingNode::angleDt(int64_t now_ns) {

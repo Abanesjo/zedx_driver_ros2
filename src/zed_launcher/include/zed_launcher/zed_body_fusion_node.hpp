@@ -1,6 +1,7 @@
 #pragma once
 
 #include "zed_launcher/depth_frame.hpp"
+#include "zed_launcher/single_body_continuity.hpp"
 
 #include <sl/Camera.hpp>
 #include <sl/Fusion.hpp>
@@ -119,6 +120,8 @@ private:
 
   void normalizeMode();
 
+  void selectConfiguredFusionConfigurations();
+
   void validateFusionConfigurations() const;
 
   const CameraSpec &
@@ -201,7 +204,8 @@ private:
 
   int selectedBodyIndex(const std::vector<sl::BodyData> &bodies);
 
-  void copyBodyToRosObject(const sl::BodyData &body,
+  void copyBodyToRosObject(const sl::Bodies &bodies,
+                           const sl::BodyData &body,
                            zed_msgs::msg::Object &object,
                            bool tracking_available);
 
@@ -229,11 +233,11 @@ private:
   std::string stream_address_;
 
   sl::BODY_TRACKING_MODEL body_model_ =
-      sl::BODY_TRACKING_MODEL::HUMAN_BODY_FAST;
+      sl::BODY_TRACKING_MODEL::HUMAN_BODY_ACCURATE;
 
-  sl::BODY_FORMAT body_format_ = sl::BODY_FORMAT::BODY_38;
+  sl::BODY_FORMAT body_format_ = sl::BODY_FORMAT::BODY_18;
 
-  sl::DEPTH_MODE depth_mode_ = sl::DEPTH_MODE::NEURAL_LIGHT;
+  sl::DEPTH_MODE depth_mode_ = sl::DEPTH_MODE::NEURAL;
 
   sl::RESOLUTION camera_resolution_ = sl::RESOLUTION::HD1080;
 
@@ -244,15 +248,15 @@ private:
 
   sl::BodyTrackingFusionRuntimeParameters fusion_runtime_params_;
 
-  double confidence_threshold_ = 70.0;
+  double confidence_threshold_ = 40.0;
 
-  double overlay_min_confidence_ = 70.0;
+  double overlay_min_confidence_ = 40.0;
 
   double overlay_max_skeleton_age_sec_ = 0.5;
 
   double single_body_switch_margin_ = 10.0;
 
-  double fusion_skeleton_smoothing_ = 1.0;
+  double fusion_skeleton_smoothing_ = 0.1;
 
   int fusion_minimum_allowed_cameras_ = 1;
 
@@ -262,7 +266,9 @@ private:
 
   int sdk_gpu_id_ = -1;
 
-  int single_body_switch_frames_ = 60;
+  int single_body_switch_frames_ = 30;
+
+  int single_body_logical_id_ = 0;
 
   int selected_body_id_ = -1;
 
@@ -270,13 +276,17 @@ private:
 
   int candidate_switch_count_ = 0;
 
-  double fusion_publish_rate_hz_ = 30.0;
+  double fusion_publish_rate_hz_ = 20.0;
 
   double fusion_diagnostics_rate_hz_ = 1.0;
 
-  double body_prediction_timeout_sec_ = 0.4;
+  double body_prediction_timeout_sec_ = 1.0;
+
+  double single_body_bridge_timeout_sec_ = 0.5;
 
   bool single_body_enabled_ = true;
+
+  std::unique_ptr<SingleBodyContinuity> single_body_continuity_;
 
   bool publish_overlay_images_ = true;
 
@@ -286,7 +296,7 @@ private:
 
   bool fusion_tracking_enabled_ = true;
 
-  bool body_fitting_enabled_ = false;
+  bool body_fitting_enabled_ = true;
 
   bool set_as_static_ = true;
 

@@ -1,5 +1,6 @@
 #include "zed_launcher/zed_body_fusion_node.hpp"
 
+#include "zed_launcher/body_format_utils.hpp"
 #include "zed_launcher/skeleton_draw_utils.hpp"
 
 #include <algorithm>
@@ -288,6 +289,7 @@ ZedBodyFusionNode::ZedBodyFusionNode(const rclcpp::NodeOptions &options,
               fusion_config_path_.c_str());
   fusion_configs_ = sl::readFusionConfigurationFile(
       fusion_config_path_, kRosCoordinateSystem, kRosUnits);
+  selectConfiguredFusionConfigurations();
   validateFusionConfigurations();
 
   configureRuntimeParameters();
@@ -387,22 +389,22 @@ void ZedBodyFusionNode::loadParameters() {
   }
 
   body_model_ = parseBodyModel(
-      declare_parameter<std::string>("body_model", "HUMAN_BODY_FAST"));
+      declare_parameter<std::string>("body_model", "HUMAN_BODY_ACCURATE"));
   body_format_ =
-      parseBodyFormat(declare_parameter<std::string>("body_format", "BODY_38"));
+      parseBodyFormat(declare_parameter<std::string>("body_format", "BODY_18"));
   depth_mode_ = parseDepthMode(
-      declare_parameter<std::string>("depth_mode", "NEURAL_LIGHT"));
+      declare_parameter<std::string>("depth_mode", "NEURAL"));
   camera_resolution_ = parseResolution(
       declare_parameter<std::string>("camera_resolution", "HD1080"));
   fusion_reference_frame_ = parseFusionReferenceFrame(
       declare_parameter<std::string>("fusion_reference_frame", "BASELINK"));
 
   confidence_threshold_ =
-      declare_parameter<double>("confidence_threshold", 70.0);
+      declare_parameter<double>("confidence_threshold", 40.0);
   single_body_switch_margin_ =
       declare_parameter<double>("single_body_switch_margin", 10.0);
   fusion_skeleton_smoothing_ =
-      declare_parameter<double>("fusion_skeleton_smoothing", 1.0);
+      declare_parameter<double>("fusion_skeleton_smoothing", 0.1);
   fusion_minimum_allowed_cameras_ =
       declare_parameter<int>("fusion_minimum_allowed_cameras", 1);
   fusion_minimum_allowed_keypoints_ =
@@ -410,13 +412,17 @@ void ZedBodyFusionNode::loadParameters() {
   camera_fps_ = declare_parameter<int>("camera_fps", 30);
   sdk_gpu_id_ = declare_parameter<int>("sdk_gpu_id", -1);
   fusion_publish_rate_hz_ =
-      declare_parameter<double>("fusion_publish_rate_hz", 30.0);
+      declare_parameter<double>("fusion_publish_rate_hz", 20.0);
   fusion_diagnostics_rate_hz_ =
       declare_parameter<double>("fusion_diagnostics_rate_hz", 1.0);
   body_prediction_timeout_sec_ =
-      declare_parameter<double>("body_prediction_timeout_sec", 0.4);
+      declare_parameter<double>("body_prediction_timeout_sec", 1.0);
   single_body_switch_frames_ =
-      declare_parameter<int>("single_body_switch_frames", 60);
+      declare_parameter<int>("single_body_switch_frames", 30);
+  single_body_logical_id_ =
+      declare_parameter<int>("single_body_logical_id", 0);
+  single_body_bridge_timeout_sec_ =
+      declare_parameter<double>("single_body_bridge_timeout_sec", 0.5);
 
   single_body_enabled_ = declare_parameter<bool>("single_body_enabled", true);
   publish_overlay_images_ =
@@ -431,8 +437,7 @@ void ZedBodyFusionNode::loadParameters() {
       declare_parameter<bool>("sender_tracking_enabled", true);
   fusion_tracking_enabled_ =
       declare_parameter<bool>("fusion_tracking_enabled", true);
-  body_fitting_enabled_ =
-      declare_parameter<bool>("body_fitting_enabled", false);
+  body_fitting_enabled_ = declare_parameter<bool>("body_fitting_enabled", true);
   set_as_static_ = declare_parameter<bool>("set_as_static", true);
   allow_reduced_precision_inference_ =
       declare_parameter<bool>("allow_reduced_precision_inference", false);
@@ -483,6 +488,17 @@ void ZedBodyFusionNode::loadParameters() {
   if (single_body_switch_frames_ <= 0) {
     throw std::runtime_error("single_body_switch_frames must be positive");
   }
+  if (single_body_logical_id_ < 0 ||
+      single_body_logical_id_ >
+          static_cast<int>(std::numeric_limits<int16_t>::max())) {
+    throw std::runtime_error(
+        "single_body_logical_id must be in the range [0, 32767]");
+  }
+  if (!std::isfinite(single_body_bridge_timeout_sec_) ||
+      single_body_bridge_timeout_sec_ < 0.0) {
+    throw std::runtime_error(
+        "single_body_bridge_timeout_sec must be finite and non-negative");
+  }
   if (fusion_minimum_allowed_cameras_ <= 0 ||
       fusion_minimum_allowed_cameras_ >
           static_cast<int>(camera_specs_.size())) {
@@ -494,6 +510,9 @@ void ZedBodyFusionNode::loadParameters() {
     throw std::runtime_error(
         "fusion_minimum_allowed_keypoints must be positive");
   }
+
+  single_body_continuity_ = std::make_unique<SingleBodyContinuity>(
+      single_body_logical_id_, single_body_bridge_timeout_sec_);
 }
 
 void ZedBodyFusionNode::normalizeMode() {
@@ -513,6 +532,49 @@ void ZedBodyFusionNode::normalizeMode() {
     throw std::runtime_error(
         "stream_address is required when input_mode:=stream");
   }
+}
+
+void ZedBodyFusionNode::selectConfiguredFusionConfigurations() {
+  std::unordered_set<unsigned int> loaded_serials;
+  for (const auto &config : fusion_configs_) {
+    const auto serial = static_cast<int64_t>(config.serial_number);
+    if (serial <= 0 || serial > static_cast<int64_t>(
+                                    std::numeric_limits<unsigned int>::max())) {
+      throw std::runtime_error(
+          "Fusion configuration contains an invalid camera serial: " +
+          std::to_string(serial));
+    }
+
+    if (!loaded_serials.insert(static_cast<unsigned int>(serial)).second) {
+      throw std::runtime_error(
+          "Fusion configuration contains duplicate camera serial: " +
+          std::to_string(serial));
+    }
+  }
+
+  std::vector<sl::FusionConfiguration> selected_configs;
+  selected_configs.reserve(camera_specs_.size());
+  for (const auto &spec : camera_specs_) {
+    const auto config = std::find_if(
+        fusion_configs_.begin(), fusion_configs_.end(),
+        [&spec](const sl::FusionConfiguration &candidate) {
+          return static_cast<unsigned int>(candidate.serial_number) ==
+                 spec.serial_number;
+        });
+    if (config == fusion_configs_.end()) {
+      throw std::runtime_error("Configured camera serial " +
+                               std::to_string(spec.serial_number) +
+                               " is not present in the Fusion calibration");
+    }
+    selected_configs.push_back(*config);
+  }
+
+  if (selected_configs.size() != fusion_configs_.size()) {
+    RCLCPP_INFO(get_logger(),
+                "Selected %zu of %zu calibrated cameras for this launch",
+                selected_configs.size(), fusion_configs_.size());
+  }
+  fusion_configs_ = std::move(selected_configs);
 }
 
 void ZedBodyFusionNode::validateFusionConfigurations() const {
@@ -1259,6 +1321,8 @@ void ZedBodyFusionNode::startCameraPublishers() {
     body_params.detection_model = body_model_;
     body_params.body_format = body_format_;
     body_params.enable_tracking = sender_tracking_enabled_;
+    // Tracking and fitting belong to Fusion in this architecture. Enabling
+    // fitting here would fit every sender skeleton before Fusion fits it again.
     body_params.enable_body_fitting = false;
     body_params.enable_segmentation = false;
     body_params.prediction_timeout_s =
@@ -1272,6 +1336,11 @@ void ZedBodyFusionNode::startCameraPublishers() {
           "Failed to enable body tracking for camera serial " +
           std::to_string(worker->serial_number) + ": " + zedErrorToString(err));
     }
+    RCLCPP_INFO(get_logger(),
+                "Camera serial %u sender body detection ready (tracking=%s, "
+                "fitting=false; Fusion owns tracking/fitting)",
+                worker->serial_number,
+                sender_tracking_enabled_ ? "true" : "false");
 
     err =
         worker->camera.setBodyTrackingRuntimeParameters(sender_runtime_params_);
@@ -1338,7 +1407,10 @@ void ZedBodyFusionNode::startFusion() {
   }
 
   RCLCPP_INFO(get_logger(),
-              "ZED body Fusion ready; publishing %s in frame '%s'",
+              "ZED body Fusion ready (tracking=%s, fitting=%s); publishing %s "
+              "in frame '%s'",
+              fusion_tracking_enabled_ ? "true" : "false",
+              body_fitting_enabled_ ? "true" : "false",
               pub_bodies_->get_topic_name(), publish_frame_id_.c_str());
 }
 
@@ -1843,7 +1915,8 @@ int ZedBodyFusionNode::selectedBodyIndex(
   return current_index;
 }
 
-void ZedBodyFusionNode::copyBodyToRosObject(const sl::BodyData &body,
+void ZedBodyFusionNode::copyBodyToRosObject(const sl::Bodies &bodies,
+                                            const sl::BodyData &body,
                                             zed_msgs::msg::Object &object,
                                             bool tracking_available) {
   object.label = "Body_" + std::to_string(body.id);
@@ -1865,7 +1938,7 @@ void ZedBodyFusionNode::copyBodyToRosObject(const sl::BodyData &body,
   }
   copyVector3(object.dimensions_3d, body.dimensions);
 
-  object.body_format = static_cast<uint8_t>(body_format_);
+  object.body_format = rosBodyFormat(bodies);
 
   if (body.head_bounding_box_2d.size() == 4) {
     copyBox2d(object.head_bounding_box_2d, body.head_bounding_box_2d);
@@ -1894,11 +1967,18 @@ zed_msgs::msg::ObjectsStamped ZedBodyFusionNode::toRosMessage(
   msg.header.frame_id = frame_id;
 
   if (apply_single_body_filter) {
+    const auto steady_now = SingleBodyContinuity::Clock::now();
     const int selected_index = selectedBodyIndex(bodies.body_list);
     if (selected_index >= 0) {
-      msg.objects.resize(1);
-      copyBodyToRosObject(bodies.body_list[static_cast<size_t>(selected_index)],
-                          msg.objects[0], tracking_available);
+      zed_msgs::msg::Object observed;
+      copyBodyToRosObject(
+          bodies, bodies.body_list[static_cast<size_t>(selected_index)],
+          observed, tracking_available);
+      msg.objects.push_back(
+          single_body_continuity_->observe(observed, steady_now));
+    } else if (const auto bridged =
+                   single_body_continuity_->bridge(steady_now)) {
+      msg.objects.push_back(*bridged);
     }
     return msg;
   }
@@ -1908,7 +1988,7 @@ zed_msgs::msg::ObjectsStamped ZedBodyFusionNode::toRosMessage(
       continue;
     }
     auto &object = msg.objects.emplace_back();
-    copyBodyToRosObject(body, object, tracking_available);
+    copyBodyToRosObject(bodies, body, object, tracking_available);
   }
 
   return msg;

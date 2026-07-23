@@ -119,6 +119,125 @@ void expectVecNear(const Vec3 &actual, const Vec3 &expected,
   EXPECT_NEAR(actual.z, expected.z, tolerance);
 }
 
+void setObjectPoint(Object &object, std::size_t index, const Vec3 &point) {
+  object.skeleton_3d.keypoints[index].kp = {
+      static_cast<float>(point.x), static_cast<float>(point.y),
+      static_cast<float>(point.z)};
+}
+
+Object encodePose(const BodyPoints &points, int body_format) {
+  Object object;
+  object.body_format = static_cast<int8_t>(body_format);
+
+  auto copy = [&](std::size_t destination, int source) {
+    if (points[source]) {
+      setObjectPoint(object, destination, *points[source]);
+    }
+  };
+
+  switch (decodeBodyFormat(body_format)) {
+  case SkeletonBodyFormat::Body18:
+    copy(1, kNeck);
+    copy(2, kRightShoulder);
+    copy(3, kRightElbow);
+    copy(4, kRightWrist);
+    copy(5, kLeftShoulder);
+    copy(6, kLeftElbow);
+    copy(7, kLeftWrist);
+    copy(8, kRightHip);
+    copy(9, kRightKnee);
+    copy(10, kRightAnkle);
+    copy(11, kLeftHip);
+    copy(12, kLeftKnee);
+    copy(13, kLeftAnkle);
+    break;
+  case SkeletonBodyFormat::Body34:
+    copy(0, kPelvis);
+    copy(3, kNeck);
+    copy(5, kLeftShoulder);
+    copy(6, kLeftElbow);
+    copy(7, kLeftWrist);
+    copy(12, kRightShoulder);
+    copy(13, kRightElbow);
+    copy(14, kRightWrist);
+    copy(18, kLeftHip);
+    copy(19, kLeftKnee);
+    copy(20, kLeftAnkle);
+    copy(22, kRightHip);
+    copy(23, kRightKnee);
+    copy(24, kRightAnkle);
+    break;
+  case SkeletonBodyFormat::Body38:
+    for (std::size_t index = 0; index < kNumBody38Points; ++index) {
+      copy(index, static_cast<int>(index));
+    }
+    break;
+  case SkeletonBodyFormat::Unsupported:
+    break;
+  }
+  return object;
+}
+
+TEST(BodyFormat, SupportsSdkAndLegacyValuesForCapsules) {
+  EXPECT_EQ(decodeBodyFormat(0), SkeletonBodyFormat::Body18);
+  EXPECT_EQ(decodeBodyFormat(1), SkeletonBodyFormat::Body34);
+  EXPECT_EQ(decodeBodyFormat(2), SkeletonBodyFormat::Body38);
+  EXPECT_EQ(decodeBodyFormat(18), SkeletonBodyFormat::Body18);
+  EXPECT_EQ(decodeBodyFormat(34), SkeletonBodyFormat::Body34);
+  EXPECT_EQ(decodeBodyFormat(38), SkeletonBodyFormat::Body38);
+  EXPECT_EQ(decodeBodyFormat(17), SkeletonBodyFormat::Unsupported);
+
+  EXPECT_EQ(bodyFormatKeypointCount(SkeletonBodyFormat::Body18), 18U);
+  EXPECT_EQ(bodyFormatKeypointCount(SkeletonBodyFormat::Body34), 34U);
+  EXPECT_EQ(bodyFormatKeypointCount(SkeletonBodyFormat::Body38), 38U);
+  EXPECT_TRUE(bodyFormatSupportsCapsules(0));
+  EXPECT_TRUE(bodyFormatSupportsCapsules(1));
+  EXPECT_TRUE(bodyFormatSupportsCapsules(2));
+  EXPECT_FALSE(bodyFormatSupportsCapsules(17));
+
+  EXPECT_FALSE(bodyFormatSupportsJointAngles(0));
+  EXPECT_FALSE(bodyFormatSupportsJointAngles(1));
+  EXPECT_TRUE(bodyFormatSupportsJointAngles(2));
+}
+
+TEST(BodyFormat, Body18SynthesizesPelvisAtHipMidpoint) {
+  BodyPoints source = makePose();
+  source[kLeftHip] = Vec3{-0.24, 0.08, 0.92};
+  source[kRightHip] = Vec3{0.18, 0.04, 0.96};
+
+  const BodyPoints canonical = canonicalBodyPoints(encodePose(source, 0));
+  ASSERT_TRUE(canonical[kPelvis]);
+  ASSERT_TRUE(canonical[kLeftHip]);
+  ASSERT_TRUE(canonical[kRightHip]);
+  expectVecNear(*canonical[kPelvis], {-0.03, 0.06, 0.94}, 1e-7);
+  expectVecNear(*canonical[kLeftHip], *source[kLeftHip], 1e-7);
+  expectVecNear(*canonical[kRightHip], *source[kRightHip], 1e-7);
+}
+
+TEST(BodyFormat, AllSupportedFormatsBuildEquivalentCapsules) {
+  BodyPoints source = makePose();
+  source[kPelvis] = 0.5 * (*source[kLeftHip] + *source[kRightHip]);
+
+  const auto reference = buildBodyCapsules(
+      canonicalBodyPoints(encodePose(source, 2)), BodyCapsuleConfig{});
+  ASSERT_EQ(reference.size(), 9U);
+
+  for (const int body_format : {0, 1, 2}) {
+    const BodyPoints canonical =
+        canonicalBodyPoints(encodePose(source, body_format));
+    const auto capsules =
+        buildBodyCapsules(canonical, BodyCapsuleConfig{});
+    ASSERT_EQ(capsules.size(), reference.size())
+        << "body_format=" << body_format;
+    for (std::size_t index = 0; index < reference.size(); ++index) {
+      EXPECT_EQ(capsules[index].name, reference[index].name);
+      expectVecNear(capsules[index].a, reference[index].a, 1e-7);
+      expectVecNear(capsules[index].b, reference[index].b, 1e-7);
+      EXPECT_DOUBLE_EQ(capsules[index].radius, reference[index].radius);
+    }
+  }
+}
+
 TEST(EstimateJointAngles, WaistYawTracksRelativeShoulderTwist) {
   for (const double expected : {radians(45.0), radians(-35.0)}) {
     const JointAngles angles = estimateJointAngles(makePose(expected));
@@ -266,6 +385,48 @@ TEST(BodyCapsules, WaistTwistDoesNotRotateIndependentTrackedLimbs) {
   expectVecNear(left_lower->b, *twisted[kLeftWrist]);
 }
 
+TEST(CapsuleAnatomyFilter, HoldsPreviousSegmentForImpossibleLength) {
+  CapsuleAnatomyFilter filter;
+  const CapsuleData valid{"left_arm", {0.0, 0.0, 1.0}, {0.26, 0.0, 1.0}, 0.075};
+  const CapsuleData impossible{
+      "left_arm", {0.0, 0.0, 1.0}, {3.04, 0.0, 1.0}, 0.075};
+
+  const auto first = filter.update({valid});
+  ASSERT_EQ(first.size(), 1U);
+  expectVecNear(first.front().a, valid.a);
+  expectVecNear(first.front().b, valid.b);
+
+  const auto held = filter.update({impossible});
+  ASSERT_EQ(held.size(), 1U);
+  expectVecNear(held.front().a, valid.a);
+  expectVecNear(held.front().b, valid.b);
+}
+
+TEST(CapsuleAnatomyFilter, ResetDoesNotHoldThePreviousTrack) {
+  CapsuleAnatomyFilter filter;
+  const CapsuleData valid{"left_arm", {0.0, 0.0, 1.0}, {0.26, 0.0, 1.0}, 0.075};
+  const CapsuleData impossible{
+      "left_arm", {0.0, 0.0, 1.0}, {3.04, 0.0, 1.0}, 0.075};
+
+  ASSERT_EQ(filter.update({valid}).size(), 1U);
+  filter.reset();
+  EXPECT_TRUE(filter.update({impossible}).empty());
+}
+
+TEST(CapsuleAnatomyFilter, HoldsSuddenBoneLengthChangeWithinAbsoluteBounds) {
+  CapsuleAnatomyFilter filter(0.25);
+  const CapsuleData valid{
+      "right_thigh", {0.0, 0.0, 1.0}, {0.4, 0.0, 1.0}, 0.0975};
+  const CapsuleData stretched{
+      "right_thigh", {0.0, 0.0, 1.0}, {0.7, 0.0, 1.0}, 0.0975};
+
+  ASSERT_EQ(filter.update({valid}).size(), 1U);
+  const auto held = filter.update({stretched});
+  ASSERT_EQ(held.size(), 1U);
+  expectVecNear(held.front().a, valid.a);
+  expectVecNear(held.front().b, valid.b);
+}
+
 TEST(MappingObservation, CompletelyInvalidSkeletonDoesNotRefreshState) {
   JointAngles angles;
   std::vector<CapsuleData> capsules;
@@ -281,6 +442,35 @@ TEST(MappingObservation, CompletelyInvalidSkeletonDoesNotRefreshState) {
   angles.valid[kWaistYaw] = false;
   capsules.push_back({"tracked", Vec3{}, Vec3{}, 0.1});
   EXPECT_TRUE(hasUsableObservation(angles, capsules));
+}
+
+TEST(EMAJumpFilter, ResetDropsStateFromThePreviousTrack) {
+  EMAJumpFilter filter(0.30, 0.60, 3);
+  const Vec3 previous_track{0.0, 0.0, 1.0};
+  const Vec3 next_track{4.0, 0.0, 1.0};
+
+  expectVecNear(filter.update(previous_track), previous_track);
+  expectVecNear(filter.update(next_track), previous_track);
+
+  filter.reset();
+  expectVecNear(filter.update(next_track), next_track);
+}
+
+TEST(PointFilterResetPolicy, ResetsOnIdentityChangeOrObservationGap) {
+  constexpr int64_t kSecond = 1'000'000'000LL;
+  const std::optional<int> body_id = 7;
+  const std::optional<int64_t> previous_time = 10 * kSecond;
+
+  EXPECT_FALSE(shouldResetPointFilters(std::nullopt, std::nullopt, 7,
+                                       10 * kSecond, 0.5));
+  EXPECT_FALSE(shouldResetPointFilters(body_id, previous_time, 7,
+                                       10 * kSecond + 500'000'000LL, 0.5));
+  EXPECT_TRUE(shouldResetPointFilters(body_id, previous_time, 8,
+                                      10 * kSecond + 1, 0.5));
+  EXPECT_TRUE(shouldResetPointFilters(body_id, previous_time, 7,
+                                      10 * kSecond + 500'000'001LL, 0.5));
+  EXPECT_TRUE(
+      shouldResetPointFilters(body_id, previous_time, 7, 9 * kSecond, 0.5));
 }
 
 TEST(AngleFilter, CircularJointsCrossPiAndInvalidValuesHold) {
@@ -381,6 +571,12 @@ TEST_F(HumanMappingNodeDefaultsTest, MatchesG1ManualCommandContract) {
   EXPECT_EQ(node->get_parameter("gains").as_double_array(), expected_gains);
   EXPECT_EQ(node->get_parameter("bias").as_double_array(), expected_bias);
   EXPECT_DOUBLE_EQ(node->get_parameter("publish_rate_hz").as_double(), 30.0);
+  EXPECT_DOUBLE_EQ(
+      node->get_parameter("point_filter_reset_gap_sec").as_double(), 0.5);
+  EXPECT_DOUBLE_EQ(
+      node->get_parameter("capsule_max_length_change_fraction").as_double(),
+      0.5);
+  EXPECT_FALSE(node->get_parameter("require_body_38").as_bool());
   EXPECT_EQ(node->get_parameter("collider_topic").as_string(),
             "/human/body_colliders");
 }

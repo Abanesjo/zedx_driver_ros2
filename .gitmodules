@@ -4,3 +4,6 @@
 [submodule "dependencies/zed-ros2-examples"]
 	path = dependencies/zed-ros2-examples
 	url = https://github.com/stereolabs/zed-ros2-examples
+[submodule "dependencies/zed-sdk"]
+	path = dependencies/zed-sdk
+	url = https://github.com/stereolabs/zed-sdk

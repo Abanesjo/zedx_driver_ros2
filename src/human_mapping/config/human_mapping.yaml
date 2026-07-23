@@ -8,11 +8,15 @@ human_mapping_node:
     publish_rate_hz: 30.0
     stale_timeout_sec: 1.0
     min_confidence: 30.0
-    require_body_38: true
+    # BODY_18 and BODY_34 use the same anatomical capsule segments. Joint
+    # angle commands remain at their home pose unless the input is BODY_38.
+    require_body_38: false
 
     point_ema_alpha: 0.30
     point_max_jump: 0.60
     point_max_reject_count: 3
+    point_filter_reset_gap_sec: 0.50
+    capsule_max_length_change_fraction: 0.50
     angle_ema_alpha: 0.25
     angle_max_rate_deg: 100.0
 

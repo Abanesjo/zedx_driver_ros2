@@ -29,6 +29,25 @@ With one visible tag, the learned rigid front-to-back transform supplies the
 tag-frame center. With neither visible, the last higher-quality estimate is
 held and rebroadcast.
 
+For isolated testing, launch one calibrated camera by its ordered ID
+(`0=left`, `1=center`, `2=right`):
+
+```bash
+ros2 launch zed_launcher body_tracking_single_camera.launch.py \
+  camera_id:=1 stream_address:=192.168.0.135 debug:=true rviz:=true
+```
+
+The launch reads the selected serial number from `calibration.json`, while the
+physical camera name and stream port retain the mapping shown above. It still
+publishes the fused skeleton at `/zed_fusion/body_trk/skeletons`, and remaps the
+single combined skeleton/AprilTag image to
+`/zed_fusion/zed_node/rgb/color/rect/body_tracking_overlay`. Per-camera raw
+skeleton topics remain disabled. This one-camera profile uses the SDK's
+quality-oriented `HUMAN_BODY_ACCURATE` detector, `NEURAL` depth, confidence 40,
+and Fusion smoothing 0.1; each remains overrideable with the corresponding
+launch argument. Fusion performs tracking and body fitting once, while the
+camera sender performs detection only.
+
 The resulting frame ownership is:
 
 ```text

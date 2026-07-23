@@ -8,6 +8,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -67,6 +68,23 @@ inline constexpr std::size_t jointIndex(JointIndex index) {
 
 using BodyPoints = std::array<std::optional<Vec3>, kNumBody38Points>;
 
+enum class SkeletonBodyFormat {
+  Body18,
+  Body34,
+  Body38,
+  Unsupported,
+};
+
+SkeletonBodyFormat decodeBodyFormat(int body_format);
+
+std::size_t bodyFormatKeypointCount(SkeletonBodyFormat body_format);
+
+bool bodyFormatSupportsCapsules(int body_format);
+
+bool bodyFormatSupportsJointAngles(int body_format);
+
+BodyPoints canonicalBodyPoints(const Object &obj);
+
 struct JointAngles {
   std::array<double, kNumJoints> values{};
   std::array<bool, kNumJoints> valid{};
@@ -84,6 +102,8 @@ public:
 
   Vec3 update(const Vec3 &x);
 
+  void reset();
+
 private:
   double alpha_;
   double max_jump_;
@@ -92,6 +112,11 @@ private:
   int reject_count_ = 0;
   std::optional<Vec3> last_rejected_;
 };
+
+bool shouldResetPointFilters(
+    const std::optional<int> &previous_body_id,
+    const std::optional<int64_t> &previous_observation_ns, int current_body_id,
+    int64_t current_observation_ns, double reset_gap_sec);
 
 class AngleFilter {
 public:
@@ -142,6 +167,21 @@ std::vector<CapsuleData> buildBodyCapsules(const BodyPoints &points,
 bool hasUsableObservation(const JointAngles &angles,
                           const std::vector<CapsuleData> &capsules);
 
+class CapsuleAnatomyFilter {
+public:
+  explicit CapsuleAnatomyFilter(double max_length_change_fraction = 0.5);
+
+  std::vector<CapsuleData> update(const std::vector<CapsuleData> &candidates);
+
+  void reset();
+
+private:
+  bool plausible(const CapsuleData &candidate) const;
+
+  double max_length_change_fraction_;
+  std::unordered_map<std::string, CapsuleData> previous_;
+};
+
 struct MappingResult {
   Time stamp;
   std::string frame_id;
@@ -158,11 +198,11 @@ private:
 
   const Object *selectBody(const ObjectsStamped &msg);
 
-  bool isBody38(int body_format) const;
-
-  void warnBodyFormat(int body_format);
+  void warnRejectedBodyFormat(int body_format);
 
   BodyPoints filteredPoints(const Object &obj);
+
+  void preparePointFilters(int body_id, int64_t observation_ns);
 
   double angleDt(int64_t now_ns);
 
@@ -205,7 +245,9 @@ private:
 
   double min_confidence_ = 70.0;
 
-  bool require_body_38_ = true;
+  bool require_body_38_ = false;
+
+  double point_filter_reset_gap_sec_ = 0.5;
 
   bool enable_neutral_calibration_ = true;
 
@@ -264,6 +306,12 @@ private:
   double shin_radius_ = 0.065;
 
   std::vector<EMAJumpFilter> point_filters_;
+
+  std::unique_ptr<CapsuleAnatomyFilter> capsule_filter_;
+
+  std::optional<int> filtered_body_id_;
+
+  std::optional<int64_t> last_point_observation_ns_;
 
   std::unique_ptr<AngleFilter> angle_filter_;
 

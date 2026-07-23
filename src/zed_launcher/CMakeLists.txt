@@ -233,6 +233,33 @@ if(BUILD_TESTING)
     tf2_ros
   )
 
+  ament_add_gtest(
+    body_format_utils_test
+    test/test_body_format_utils.cpp
+  )
+  target_compile_features(body_format_utils_test PRIVATE cxx_std_17)
+  target_include_directories(body_format_utils_test PRIVATE
+    include
+    ${ZED_INCLUDE_DIRS}
+    ${CUDAToolkit_INCLUDE_DIRS}
+  )
+  target_link_libraries(body_format_utils_test
+    ${ZED_LIBRARIES}
+    CUDA::cudart
+  )
+
+  ament_add_gtest(
+    single_body_continuity_test
+    test/test_single_body_continuity.cpp
+  )
+  target_compile_features(single_body_continuity_test PRIVATE cxx_std_17)
+  target_include_directories(single_body_continuity_test PRIVATE
+    include
+  )
+  ament_target_dependencies(single_body_continuity_test
+    zed_msgs
+  )
+
   ament_add_pytest_test(
     generate_apriltag_prints_test
     test/test_generate_apriltag_prints.py
@@ -243,6 +270,13 @@ if(BUILD_TESTING)
   ament_add_pytest_test(
     body_tracking_launch_contract_test
     test/test_body_tracking_launch_contract.py
+    APPEND_ENV PYTHONDONTWRITEBYTECODE=1
+    TIMEOUT 60
+  )
+
+  ament_add_pytest_test(
+    single_camera_launch_test
+    test/test_single_camera_launch.py
     APPEND_ENV PYTHONDONTWRITEBYTECODE=1
     TIMEOUT 60
   )
