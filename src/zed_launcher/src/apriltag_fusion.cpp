@@ -78,9 +78,12 @@ void ApriltagFusionNode::ArucoDetectorAdapter::detectMarkers(
 #endif
 }
 
-ApriltagFusionNode::ApriltagFusionNode(const rclcpp::NodeOptions &options)
-    : Node("apriltag_fusion_node", options), tf_buffer_(get_clock()),
+ApriltagFusionNode::ApriltagFusionNode(const rclcpp::NodeOptions &options,
+                                       ImageInputMode image_input_mode)
+    : Node("apriltag_fusion_node", options),
+      image_input_mode_(image_input_mode), tf_buffer_(get_clock()),
       tf_listener_(tf_buffer_) {
+  enabled_ = declare_parameter<bool>("enable_apriltag_fusion", true);
   camera_names_ = declare_parameter<std::vector<std::string>>(
       "camera_names", {"zed_left", "zed_center", "zed_right"});
   fusion_frame_id_ =
@@ -102,7 +105,7 @@ ApriltagFusionNode::ApriltagFusionNode(const rclcpp::NodeOptions &options)
   max_detection_rate_hz_ =
       declare_parameter<double>("max_detection_rate_hz", 30.0);
   fusion_publish_rate_hz_ =
-      declare_parameter<double>("fusion_publish_rate_hz", 30.0);
+      declare_parameter<double>("apriltag_fusion_publish_rate_hz", 30.0);
   tf_lookup_timeout_sec_ =
       declare_parameter<double>("tf_lookup_timeout_sec", 0.05);
   publish_fusion_pose_ = declare_parameter<bool>("publish_fusion_pose", true);
@@ -130,6 +133,11 @@ ApriltagFusionNode::ApriltagFusionNode(const rclcpp::NodeOptions &options)
   smoothing_reset_sec_ = declare_parameter<double>("smoothing_reset_sec", 0.50);
 
   learned_tag_separation_m_ = 2.0 * initial_tag_frame_offset_m_;
+
+  if (!enabled_) {
+    RCLCPP_INFO(get_logger(), "AprilTag fusion is disabled");
+    return;
+  }
 
   if (camera_names_.empty()) {
     throw std::runtime_error("camera_names must contain at least one camera");
@@ -178,7 +186,8 @@ ApriltagFusionNode::ApriltagFusionNode(const rclcpp::NodeOptions &options)
   }
   if (!std::isfinite(fusion_publish_rate_hz_) ||
       fusion_publish_rate_hz_ <= 0.0) {
-    throw std::runtime_error("fusion_publish_rate_hz must be positive");
+    throw std::runtime_error(
+        "apriltag_fusion_publish_rate_hz must be positive");
   }
   if (!std::isfinite(tf_lookup_timeout_sec_) || tf_lookup_timeout_sec_ < 0.0) {
     throw std::runtime_error("tf_lookup_timeout_sec must be non-negative");
@@ -246,35 +255,42 @@ ApriltagFusionNode::ApriltagFusionNode(const rclcpp::NodeOptions &options)
         "/" + camera->name + "/zed_node/rgb/color/rect/apriltag_overlay";
     camera->detector = std::make_unique<ArucoDetectorAdapter>(
         dictionary_id, corner_refinement_);
-    camera->callback_group =
-        create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+    if (image_input_mode_ == ImageInputMode::RosTopics) {
+      camera->callback_group =
+          create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
 
-    if (publish_debug_images_) {
-      camera->debug_pub = create_publisher<sensor_msgs::msg::Image>(
-          camera->debug_topic, rclcpp::SensorDataQoS());
-    }
+      if (publish_debug_images_) {
+        camera->debug_pub = create_publisher<sensor_msgs::msg::Image>(
+            camera->debug_topic, rclcpp::SensorDataQoS());
+      }
 
-    rclcpp::SubscriptionOptions subscription_options;
-    subscription_options.callback_group = camera->callback_group;
-    camera->camera_info_sub = create_subscription<sensor_msgs::msg::CameraInfo>(
-        camera->camera_info_topic, rclcpp::SensorDataQoS(),
-        [this, camera_index](sensor_msgs::msg::CameraInfo::SharedPtr msg) {
-          handleCameraInfo(camera_index, std::move(msg));
-        },
-        subscription_options);
-    camera->image_sub = create_subscription<sensor_msgs::msg::Image>(
-        camera->image_topic, rclcpp::SensorDataQoS(),
-        [this, camera_index](sensor_msgs::msg::Image::ConstSharedPtr msg) {
-          handleImage(camera_index, std::move(msg));
-        },
-        subscription_options);
+      rclcpp::SubscriptionOptions subscription_options;
+      subscription_options.callback_group = camera->callback_group;
+      camera->camera_info_sub =
+          create_subscription<sensor_msgs::msg::CameraInfo>(
+              camera->camera_info_topic, rclcpp::SensorDataQoS(),
+              [this,
+               camera_index](sensor_msgs::msg::CameraInfo::SharedPtr msg) {
+                handleCameraInfo(camera_index, std::move(msg));
+              },
+              subscription_options);
+      camera->image_sub = create_subscription<sensor_msgs::msg::Image>(
+          camera->image_topic, rclcpp::SensorDataQoS(),
+          [this, camera_index](sensor_msgs::msg::Image::ConstSharedPtr msg) {
+            handleImage(camera_index, std::move(msg));
+          },
+          subscription_options);
 
-    RCLCPP_INFO(get_logger(), "AprilTag input %s: %s + %s",
-                camera->name.c_str(), camera->image_topic.c_str(),
-                camera->camera_info_topic.c_str());
-    if (publish_debug_images_) {
-      RCLCPP_INFO(get_logger(), "AprilTag debug output %s: %s",
-                  camera->name.c_str(), camera->debug_topic.c_str());
+      RCLCPP_INFO(get_logger(), "AprilTag input %s: %s + %s",
+                  camera->name.c_str(), camera->image_topic.c_str(),
+                  camera->camera_info_topic.c_str());
+      if (publish_debug_images_) {
+        RCLCPP_INFO(get_logger(), "AprilTag debug output %s: %s",
+                    camera->name.c_str(), camera->debug_topic.c_str());
+      }
+    } else {
+      RCLCPP_INFO(get_logger(), "AprilTag direct image input: %s",
+                  camera->name.c_str());
     }
     cameras_.push_back(std::move(camera));
   }
@@ -303,26 +319,99 @@ void ApriltagFusionNode::handleCameraInfo(
 
 void ApriltagFusionNode::handleImage(
     size_t camera_index, const sensor_msgs::msg::Image::ConstSharedPtr msg) {
+  auto debug_image =
+      processImage(camera_index, *msg, nullptr, publish_debug_images_);
+  auto &camera = *cameras_.at(camera_index);
+  if (debug_image && camera.debug_pub) {
+    camera.debug_pub->publish(std::move(*debug_image));
+  }
+}
+
+void ApriltagFusionNode::processCameraFrame(
+    const std::string &camera_name, const sensor_msgs::msg::Image &source,
+    const sensor_msgs::msg::CameraInfo &camera_info,
+    sensor_msgs::msg::Image *debug_overlay) {
+  if (!enabled_) {
+    return;
+  }
+  if (image_input_mode_ != ImageInputMode::Direct) {
+    RCLCPP_WARN_THROTTLE(
+        get_logger(), *get_clock(), 2000,
+        "Ignoring direct AprilTag frame for %s while using ROS topic input",
+        camera_name.c_str());
+    return;
+  }
+
+  const auto camera_name_it =
+      std::find(camera_names_.begin(), camera_names_.end(), camera_name);
+  if (camera_name_it == camera_names_.end()) {
+    RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
+                         "Ignoring AprilTag frame for unknown camera '%s'",
+                         camera_name.c_str());
+    return;
+  }
+  const auto camera_index =
+      static_cast<size_t>(std::distance(camera_names_.begin(), camera_name_it));
+  auto &camera = *cameras_.at(camera_index);
+  {
+    std::lock_guard<std::mutex> lock(camera.mutex);
+    camera.latest_camera_info =
+        std::make_shared<sensor_msgs::msg::CameraInfo>(camera_info);
+  }
+
+  auto rendered = processImage(camera_index, source, debug_overlay,
+                               debug_overlay != nullptr);
+  if (debug_overlay && rendered) {
+    *debug_overlay = std::move(*rendered);
+  }
+}
+
+std::optional<sensor_msgs::msg::Image> ApriltagFusionNode::processImage(
+    size_t camera_index, const sensor_msgs::msg::Image &source,
+    const sensor_msgs::msg::Image *debug_base, bool render_debug) {
+  if (!enabled_) {
+    return std::nullopt;
+  }
+
   auto &camera = *cameras_.at(camera_index);
   const auto current_time = now();
   if (shouldSkipFrame(camera, current_time)) {
-    return;
+    return std::nullopt;
   }
 
   cv::Mat gray;
-  if (!toGrayImage(*msg, gray)) {
+  if (!toGrayImage(source, gray)) {
     RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
                          "Unsupported or invalid image on %s: encoding=%s",
-                         camera.image_topic.c_str(), msg->encoding.c_str());
-    return;
+                         camera.image_topic.c_str(), source.encoding.c_str());
+    return std::nullopt;
   }
 
   cv::Mat debug_image;
-  if (publish_debug_images_ && !toBgrImage(*msg, debug_image)) {
-    RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
-                         "Cannot convert debug image on %s",
-                         camera.image_topic.c_str());
+  if (render_debug) {
+    const auto &debug_source = debug_base ? *debug_base : source;
+    try {
+      if (!toBgrImage(debug_source, debug_image)) {
+        RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
+                             "Cannot convert debug image on %s",
+                             camera.image_topic.c_str());
+      }
+    } catch (const cv::Exception &ex) {
+      debug_image.release();
+      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
+                           "Cannot convert debug image on %s: %s",
+                           camera.image_topic.c_str(), ex.what());
+    }
   }
+
+  const auto renderedDebugImage =
+      [this, &source,
+       &debug_image]() -> std::optional<sensor_msgs::msg::Image> {
+    if (debug_image.empty()) {
+      return std::nullopt;
+    }
+    return makeDebugImage(source, debug_image);
+  };
 
   std::vector<int> ids;
   std::vector<std::vector<cv::Point2f>> corners;
@@ -332,10 +421,7 @@ void ApriltagFusionNode::handleImage(
     RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
                          "AprilTag detection failed on %s: %s",
                          camera.name.c_str(), ex.what());
-    if (!debug_image.empty()) {
-      publishDebugImage(camera, *msg, debug_image);
-    }
-    return;
+    return renderedDebugImage();
   }
 
   if (!debug_image.empty()) {
@@ -344,14 +430,25 @@ void ApriltagFusionNode::handleImage(
       if (ids[index] != front_tag_id_ && ids[index] != back_tag_id_) {
         continue;
       }
-      const std::vector<std::vector<cv::Point2f>> outline{corners[index]};
-      cv::polylines(debug_image, outline, true, cv::Scalar(0, 255, 255), 2,
-                    cv::LINE_AA);
-      if (!corners[index].empty()) {
+      try {
+        if (!drawDebugMarkerOutline(debug_image, corners[index])) {
+          RCLCPP_WARN_THROTTLE(
+              get_logger(), *get_clock(), 2000,
+              "Cannot draw AprilTag debug outline for id=%d on %s: "
+              "invalid corners",
+              ids[index], camera.name.c_str());
+          continue;
+        }
+        const auto &corner = corners[index].front();
         cv::putText(debug_image, "id " + std::to_string(ids[index]),
-                    corners[index].front() + cv::Point2f(4.0F, -6.0F),
+                    cv::Point(cvRound(corner.x) + 4, cvRound(corner.y) - 6),
                     cv::FONT_HERSHEY_SIMPLEX, 0.65, cv::Scalar(0, 255, 255), 2,
                     cv::LINE_AA);
+      } catch (const cv::Exception &ex) {
+        RCLCPP_WARN_THROTTLE(
+            get_logger(), *get_clock(), 2000,
+            "Cannot draw AprilTag debug outline for id=%d on %s: %s",
+            ids[index], camera.name.c_str(), ex.what());
       }
     }
   }
@@ -361,10 +458,7 @@ void ApriltagFusionNode::handleImage(
     RCLCPP_DEBUG_THROTTLE(get_logger(), *get_clock(), 2000,
                           "AprilTags id=%d/id=%d not detected by %s",
                           front_tag_id_, back_tag_id_, camera.name.c_str());
-    if (!debug_image.empty()) {
-      publishDebugImage(camera, *msg, debug_image);
-    }
-    return;
+    return renderedDebugImage();
   }
 
   sensor_msgs::msg::CameraInfo::SharedPtr camera_info;
@@ -376,21 +470,15 @@ void ApriltagFusionNode::handleImage(
     RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
                          "Waiting for camera info on %s",
                          camera.camera_info_topic.c_str());
-    if (!debug_image.empty()) {
-      publishDebugImage(camera, *msg, debug_image);
-    }
-    return;
+    return renderedDebugImage();
   }
 
-  const auto camera_matrix = cameraMatrixForImage(*camera_info, *msg);
+  const auto camera_matrix = cameraMatrixForImage(*camera_info, source);
   if (!camera_matrix) {
     RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
                          "Camera info on %s has invalid intrinsics",
                          camera.camera_info_topic.c_str());
-    if (!debug_image.empty()) {
-      publishDebugImage(camera, *msg, debug_image);
-    }
-    return;
+    return renderedDebugImage();
   }
   const auto distortion_coeffs = distortionCoeffs(*camera_info);
 
@@ -441,29 +529,34 @@ void ApriltagFusionNode::handleImage(
     }
 
     if (!debug_image.empty()) {
-      cv::drawFrameAxes(debug_image, *camera_matrix, distortion_coeffs,
-                        pose_estimates[tag_slot]->rvec,
-                        pose_estimates[tag_slot]->tvec,
-                        static_cast<float>(debug_axis_length_m_), 2);
+      try {
+        cv::drawFrameAxes(debug_image, *camera_matrix, distortion_coeffs,
+                          pose_estimates[tag_slot]->rvec,
+                          pose_estimates[tag_slot]->tvec,
+                          static_cast<float>(debug_axis_length_m_), 2);
+      } catch (const cv::Exception &ex) {
+        RCLCPP_WARN_THROTTLE(
+            get_logger(), *get_clock(), 2000,
+            "Cannot draw AprilTag debug axes for id=%d on %s: %s",
+            tagId(tag_slot), camera.name.c_str(), ex.what());
+      }
     }
   }
 
-  if (!debug_image.empty()) {
-    publishDebugImage(camera, *msg, debug_image);
-  }
+  auto debug_result = renderedDebugImage();
 
   if (!pose_estimates[kFrontTagSlot] && !pose_estimates[kBackTagSlot]) {
-    return;
+    return debug_result;
   }
 
-  const auto camera_frame_id = !msg->header.frame_id.empty()
-                                   ? msg->header.frame_id
+  const auto camera_frame_id = !source.header.frame_id.empty()
+                                   ? source.header.frame_id
                                    : camera_info->header.frame_id;
   if (camera_frame_id.empty()) {
     RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
                          "Image and camera_info from %s have empty frame_id",
                          camera.name.c_str());
-    return;
+    return debug_result;
   }
 
   geometry_msgs::msg::TransformStamped fusion_from_camera_msg;
@@ -477,13 +570,13 @@ void ApriltagFusionNode::handleImage(
         "Cannot transform %s -> %s for AprilTag detection from %s: %s",
         camera_frame_id.c_str(), fusion_frame_id_.c_str(), camera.name.c_str(),
         ex.what());
-    return;
+    return debug_result;
   }
 
   const auto fusion_from_camera =
       transformFromMsg(fusion_from_camera_msg.transform);
   const auto source_stamp =
-      rclcpp::Time(msg->header.stamp, get_clock()->get_clock_type());
+      rclcpp::Time(source.header.stamp, get_clock()->get_clock_type());
   std::array<std::optional<Observation>, kTagCount> new_observations;
   for (size_t tag_slot = 0; tag_slot < kTagCount; ++tag_slot) {
     if (!pose_estimates[tag_slot]) {
@@ -515,6 +608,7 @@ void ApriltagFusionNode::handleImage(
       }
     }
   }
+  return debug_result;
 }
 
 bool ApriltagFusionNode::shouldSkipFrame(CameraContext &camera,
@@ -1053,12 +1147,29 @@ bool ApriltagFusionNode::toBgrImage(const sensor_msgs::msg::Image &msg,
   return false;
 }
 
-void ApriltagFusionNode::publishDebugImage(
-    CameraContext &camera, const sensor_msgs::msg::Image &source,
-    const cv::Mat &bgr) const {
-  if (!camera.debug_pub || bgr.empty()) {
-    return;
+bool ApriltagFusionNode::drawDebugMarkerOutline(
+    cv::Mat &bgr, const std::vector<cv::Point2f> &corners) {
+  if (corners.size() < 2) {
+    return false;
   }
+
+  std::vector<cv::Point> integer_corners;
+  integer_corners.reserve(corners.size());
+  for (const auto &corner : corners) {
+    if (!std::isfinite(corner.x) || !std::isfinite(corner.y)) {
+      return false;
+    }
+    integer_corners.emplace_back(cvRound(corner.x), cvRound(corner.y));
+  }
+
+  const std::vector<std::vector<cv::Point>> outline{integer_corners};
+  cv::polylines(bgr, outline, true, cv::Scalar(0, 255, 255), 2, cv::LINE_AA);
+  return true;
+}
+
+sensor_msgs::msg::Image
+ApriltagFusionNode::makeDebugImage(const sensor_msgs::msg::Image &source,
+                                   const cv::Mat &bgr) const {
   const cv::Mat contiguous = bgr.isContinuous() ? bgr : bgr.clone();
   sensor_msgs::msg::Image output;
   output.header = source.header;
@@ -1069,7 +1180,7 @@ void ApriltagFusionNode::publishDebugImage(
   output.step = static_cast<uint32_t>(contiguous.cols * contiguous.elemSize());
   const auto byte_count = static_cast<size_t>(output.step) * output.height;
   output.data.assign(contiguous.data, contiguous.data + byte_count);
-  camera.debug_pub->publish(std::move(output));
+  return output;
 }
 
 std::optional<cv::Mat> ApriltagFusionNode::cameraMatrixForImage(

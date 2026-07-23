@@ -33,8 +33,18 @@ namespace zed_launcher {
 
 class ApriltagFusionNode final : public rclcpp::Node {
 public:
+  enum class ImageInputMode { RosTopics, Direct };
+
   explicit ApriltagFusionNode(
-      const rclcpp::NodeOptions &options = rclcpp::NodeOptions());
+      const rclcpp::NodeOptions &options = rclcpp::NodeOptions(),
+      ImageInputMode image_input_mode = ImageInputMode::RosTopics);
+
+  bool enabled() const { return enabled_; }
+
+  void processCameraFrame(const std::string &camera_name,
+                          const sensor_msgs::msg::Image &source,
+                          const sensor_msgs::msg::CameraInfo &camera_info,
+                          sensor_msgs::msg::Image *debug_overlay);
 
 private:
   friend class ApriltagFusionNodeTestPeer;
@@ -108,6 +118,10 @@ private:
   void handleImage(size_t camera_index,
                    const sensor_msgs::msg::Image::ConstSharedPtr msg);
 
+  std::optional<sensor_msgs::msg::Image>
+  processImage(size_t camera_index, const sensor_msgs::msg::Image &source,
+               const sensor_msgs::msg::Image *debug_base, bool render_debug);
+
   bool shouldSkipFrame(CameraContext &camera, const rclcpp::Time &current_time);
 
   void fuseAndPublish();
@@ -145,9 +159,11 @@ private:
 
   bool toBgrImage(const sensor_msgs::msg::Image &msg, cv::Mat &bgr) const;
 
-  void publishDebugImage(CameraContext &camera,
-                         const sensor_msgs::msg::Image &source,
-                         const cv::Mat &bgr) const;
+  static bool drawDebugMarkerOutline(cv::Mat &bgr,
+                                     const std::vector<cv::Point2f> &corners);
+
+  sensor_msgs::msg::Image makeDebugImage(const sensor_msgs::msg::Image &source,
+                                         const cv::Mat &bgr) const;
 
   std::optional<cv::Mat>
   cameraMatrixForImage(const sensor_msgs::msg::CameraInfo &camera_info,
@@ -188,6 +204,8 @@ private:
   std::string tag_frame_id_;
   std::string pose_topic_;
 
+  ImageInputMode image_input_mode_ = ImageInputMode::RosTopics;
+  bool enabled_ = true;
   int front_tag_id_ = 0;
   int back_tag_id_ = 1;
   double front_tag_size_m_ = 0.12;

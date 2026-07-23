@@ -75,6 +75,18 @@ public:
   static rclcpp::Time lastSmoothedReceipt(const ApriltagFusionNode &node) {
     return node.last_smoothed_receipt_time_;
   }
+
+  static bool drawDebugMarkerOutline(cv::Mat &bgr,
+                                     const std::vector<cv::Point2f> &corners) {
+    return ApriltagFusionNode::drawDebugMarkerOutline(bgr, corners);
+  }
+
+  static std::optional<sensor_msgs::msg::Image>
+  processImage(ApriltagFusionNode &node, size_t camera_index,
+               const sensor_msgs::msg::Image &source,
+               const sensor_msgs::msg::Image *debug_base, bool render_debug) {
+    return node.processImage(camera_index, source, debug_base, render_debug);
+  }
 };
 
 namespace {
@@ -173,6 +185,60 @@ TEST_F(ApriltagFusionTest, DefaultInterfaceMatchesDualTagContract) {
   EXPECT_TRUE(node->get_parameter("learn_tag_separation").as_bool());
   EXPECT_FALSE(node->get_parameter("publish_debug_images").as_bool());
   EXPECT_EQ(node->get_parameter("camera_names").as_string_array().size(), 3U);
+}
+
+TEST(ApriltagFusionOverlayTest, DrawsFloatingPointDetectorCorners) {
+  cv::Mat image = cv::Mat::zeros(64, 64, CV_8UC3);
+  const std::vector<cv::Point2f> corners{
+      cv::Point2f(8.25F, 8.75F), cv::Point2f(48.25F, 8.75F),
+      cv::Point2f(48.25F, 48.75F), cv::Point2f(8.25F, 48.75F)};
+
+  bool rendered = false;
+  EXPECT_NO_THROW(rendered = ApriltagFusionNodeTestPeer::drawDebugMarkerOutline(
+                      image, corners));
+  EXPECT_TRUE(rendered);
+  EXPECT_GT(cv::countNonZero(image.reshape(1)), 0);
+}
+
+TEST_F(ApriltagFusionTest, CombinedOverlayPreservesSkeletonDebugBase) {
+  const std::vector<rclcpp::Parameter> parameters{
+      rclcpp::Parameter("camera_names", std::vector<std::string>{"camera_0"}),
+      rclcpp::Parameter("publish_tf", false),
+      rclcpp::Parameter("publish_fusion_pose", true),
+      rclcpp::Parameter("max_detection_rate_hz", 0.0)};
+  rclcpp::NodeOptions options;
+  options.parameter_overrides(parameters);
+  auto node = std::make_shared<ApriltagFusionNode>(
+      options, ApriltagFusionNode::ImageInputMode::Direct);
+
+  sensor_msgs::msg::Image source;
+  source.header.stamp = node->now();
+  source.header.frame_id = "camera_0_left_camera_optical_frame";
+  source.height = 32;
+  source.width = 32;
+  source.encoding = "bgr8";
+  source.step = source.width * 3;
+  source.data.assign(static_cast<size_t>(source.height) * source.step, 0U);
+
+  auto skeleton_base = source;
+  const size_t marked_pixel =
+      static_cast<size_t>(12) * skeleton_base.step + static_cast<size_t>(9) * 3;
+  skeleton_base.data.at(marked_pixel) = 41U;
+  skeleton_base.data.at(marked_pixel + 1) = 199U;
+  skeleton_base.data.at(marked_pixel + 2) = 83U;
+
+  const auto combined = ApriltagFusionNodeTestPeer::processImage(
+      *node, 0, source, &skeleton_base, true);
+
+  ASSERT_TRUE(combined);
+  EXPECT_EQ(combined->header.frame_id, source.header.frame_id);
+  EXPECT_EQ(combined->header.stamp.sec, source.header.stamp.sec);
+  EXPECT_EQ(combined->header.stamp.nanosec, source.header.stamp.nanosec);
+  EXPECT_EQ(combined->encoding, "bgr8");
+  EXPECT_EQ(combined->height, source.height);
+  EXPECT_EQ(combined->width, source.width);
+  EXPECT_EQ(combined->step, source.step);
+  EXPECT_EQ(combined->data, skeleton_base.data);
 }
 
 TEST_F(ApriltagFusionTest, SingleTagsProduceSameRobotCenterAndOrientation) {

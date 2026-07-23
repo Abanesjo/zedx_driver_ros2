@@ -16,6 +16,7 @@
 #include <string>
 #include <thread>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 #include <opencv2/imgproc.hpp>
@@ -195,8 +196,11 @@ void copySkeleton3d(RosSkeleton &dest, const SlKeypoints &src) {
 
 } // namespace
 
-ZedBodyFusionNode::ZedBodyFusionNode(const rclcpp::NodeOptions &options)
-    : Node("zed_body_fusion_node", options) {
+ZedBodyFusionNode::ZedBodyFusionNode(const rclcpp::NodeOptions &options,
+                                     ImageProcessor image_processor,
+                                     const std::string &node_namespace)
+    : Node("zed_body_fusion_node", node_namespace, options),
+      image_processor_(std::move(image_processor)) {
   loadParameters();
 
   normalizeMode();
@@ -253,8 +257,7 @@ void ZedBodyFusionNode::loadParameters() {
       "camera_names",
       std::vector<std::string>{"zed_left", "zed_center", "zed_right"});
   const auto camera_serials = declare_parameter<std::vector<int64_t>>(
-      "camera_serials",
-      std::vector<int64_t>{41235597, 46229474, 49967328});
+      "camera_serials", std::vector<int64_t>{41235597, 46229474, 49967328});
   const auto stream_ports = declare_parameter<std::vector<int64_t>>(
       "stream_ports", std::vector<int64_t>{30000, 30004, 30002});
 
@@ -280,9 +283,8 @@ void ZedBodyFusionNode::loadParameters() {
     if (name.empty()) {
       throw std::runtime_error("camera_names entries must be non-empty");
     }
-    if (serial <= 0 ||
-        serial >
-            static_cast<int64_t>(std::numeric_limits<unsigned int>::max())) {
+    if (serial <= 0 || serial > static_cast<int64_t>(
+                                    std::numeric_limits<unsigned int>::max())) {
       throw std::runtime_error(
           "camera_serials entries must be positive valid ZED serials");
     }
@@ -302,8 +304,7 @@ void ZedBodyFusionNode::loadParameters() {
                                std::to_string(port));
     }
 
-    camera_specs_.push_back(CameraSpec{name,
-                                       static_cast<unsigned int>(serial),
+    camera_specs_.push_back(CameraSpec{name, static_cast<unsigned int>(serial),
                                        static_cast<int>(port)});
   }
 
@@ -336,7 +337,6 @@ void ZedBodyFusionNode::loadParameters() {
       declare_parameter<int>("single_body_switch_frames", 5);
 
   single_body_enabled_ = declare_parameter<bool>("single_body_enabled", true);
-  publish_images_ = declare_parameter<bool>("publish_images", false);
   publish_overlay_images_ =
       declare_parameter<bool>("publish_overlay_images", true);
   publish_per_camera_skeletons_ =
@@ -413,19 +413,17 @@ void ZedBodyFusionNode::normalizeMode() {
 
 void ZedBodyFusionNode::validateFusionConfigurations() const {
   if (fusion_configs_.size() != camera_specs_.size()) {
-    throw std::runtime_error(
-        "Fusion configuration camera count " +
-        std::to_string(fusion_configs_.size()) +
-        " does not match configured camera count " +
-        std::to_string(camera_specs_.size()));
+    throw std::runtime_error("Fusion configuration camera count " +
+                             std::to_string(fusion_configs_.size()) +
+                             " does not match configured camera count " +
+                             std::to_string(camera_specs_.size()));
   }
 
   std::unordered_set<unsigned int> calibration_serials;
   for (const auto &config : fusion_configs_) {
     const auto serial = static_cast<int64_t>(config.serial_number);
-    if (serial <= 0 ||
-        serial >
-            static_cast<int64_t>(std::numeric_limits<unsigned int>::max())) {
+    if (serial <= 0 || serial > static_cast<int64_t>(
+                                    std::numeric_limits<unsigned int>::max())) {
       throw std::runtime_error(
           "Fusion configuration contains an invalid camera serial: " +
           std::to_string(serial));
@@ -442,16 +440,14 @@ void ZedBodyFusionNode::validateFusionConfigurations() const {
   }
 }
 
-const ZedBodyFusionNode::CameraSpec &
-ZedBodyFusionNode::cameraSpecForConfig(
+const ZedBodyFusionNode::CameraSpec &ZedBodyFusionNode::cameraSpecForConfig(
     const sl::FusionConfiguration &config) const {
   const auto serial = static_cast<int64_t>(config.serial_number);
-  const auto spec =
-      std::find_if(camera_specs_.begin(), camera_specs_.end(),
-                   [serial](const CameraSpec &candidate) {
-                     return static_cast<int64_t>(candidate.serial_number) ==
-                            serial;
-                   });
+  const auto spec = std::find_if(
+      camera_specs_.begin(), camera_specs_.end(),
+      [serial](const CameraSpec &candidate) {
+        return static_cast<int64_t>(candidate.serial_number) == serial;
+      });
   if (spec == camera_specs_.end()) {
     throw std::runtime_error("Calibration camera serial " +
                              std::to_string(serial) +
@@ -470,19 +466,9 @@ std::string ZedBodyFusionNode::cameraNameForConfig(
   return cameraSpecForConfig(config).name;
 }
 
-std::string
-ZedBodyFusionNode::imageTopicForCamera(const std::string &camera_name) const {
-  return "/" + camera_name + "/zed_node/rgb/color/rect/image";
-}
-
-std::string ZedBodyFusionNode::cameraInfoTopicForCamera(
-    const std::string &camera_name) const {
-  return "/" + camera_name + "/zed_node/rgb/color/rect/camera_info";
-}
-
 std::string ZedBodyFusionNode::overlayImageTopicForCamera(
     const std::string &camera_name) const {
-  return "/" + camera_name + "/zed_node/rgb/color/rect/skeleton_overlay";
+  return "/" + camera_name + "/zed_node/rgb/color/rect/body_tracking_overlay";
 }
 
 std::string
@@ -576,23 +562,17 @@ ZedBodyFusionNode::makeCameraInfo(sl::Camera &camera,
   return msg;
 }
 
-void ZedBodyFusionNode::configureImagePublishing(CameraWorker &worker) {
-  if (!publish_images_) {
-    return;
-  }
-
+void ZedBodyFusionNode::configureImageProcessing(CameraWorker &worker) {
   worker.camera_name = cameraNameForConfig(worker.config);
   worker.image_frame_id = imageFrameForCamera(worker.camera_name);
   worker.camera_info = makeCameraInfo(worker.camera, worker.image_frame_id);
-  worker.image_pub = create_publisher<sensor_msgs::msg::Image>(
-      imageTopicForCamera(worker.camera_name), rclcpp::SensorDataQoS());
-  worker.camera_info_pub = create_publisher<sensor_msgs::msg::CameraInfo>(
-      cameraInfoTopicForCamera(worker.camera_name), rclcpp::SensorDataQoS());
 
-  RCLCPP_INFO(get_logger(), "Publishing stream images for serial %u on %s",
-              worker.serial_number, worker.image_pub->get_topic_name());
-  RCLCPP_INFO(get_logger(), "Publishing stream camera info for serial %u on %s",
-              worker.serial_number, worker.camera_info_pub->get_topic_name());
+  if (image_processor_) {
+    RCLCPP_INFO(get_logger(),
+                "Passing pristine frames for serial %u to the in-process "
+                "image processor",
+                worker.serial_number);
+  }
 }
 
 void ZedBodyFusionNode::configureOverlayPublishing(CameraWorker &worker) {
@@ -606,12 +586,12 @@ void ZedBodyFusionNode::configureOverlayPublishing(CameraWorker &worker) {
       overlayImageTopicForCamera(worker.camera_name), rclcpp::SensorDataQoS());
 
   RCLCPP_INFO(get_logger(),
-              "Publishing skeleton overlay images for serial %u on %s",
+              "Publishing combined body-tracking overlay images for serial "
+              "%u on %s",
               worker.serial_number, worker.overlay_image_pub->get_topic_name());
 }
 
-void ZedBodyFusionNode::configurePerCameraBodyPublishing(
-    CameraWorker &worker) {
+void ZedBodyFusionNode::configurePerCameraBodyPublishing(CameraWorker &worker) {
   if (!publish_per_camera_skeletons_) {
     return;
   }
@@ -626,15 +606,6 @@ void ZedBodyFusionNode::configurePerCameraBodyPublishing(
               worker.serial_number, worker.bodies_pub->get_topic_name());
 }
 
-bool ZedBodyFusionNode::hasImageSubscribers(const CameraWorker &worker) const {
-  if (!publish_images_ || !worker.image_pub || !worker.camera_info_pub) {
-    return false;
-  }
-
-  return worker.image_pub->get_subscription_count() > 0 ||
-         worker.camera_info_pub->get_subscription_count() > 0;
-}
-
 bool ZedBodyFusionNode::hasOverlayImageSubscribers(
     const CameraWorker &worker) const {
   return publish_overlay_images_ && worker.overlay_image_pub &&
@@ -642,7 +613,8 @@ bool ZedBodyFusionNode::hasOverlayImageSubscribers(
 }
 
 bool ZedBodyFusionNode::shouldRetrieveImage(const CameraWorker &worker) const {
-  return hasImageSubscribers(worker) || hasOverlayImageSubscribers(worker);
+  return static_cast<bool>(image_processor_) ||
+         hasOverlayImageSubscribers(worker);
 }
 
 builtin_interfaces::msg::Time
@@ -719,13 +691,47 @@ void ZedBodyFusionNode::publishImage(CameraWorker &worker,
   camera_info_msg.width = image_msg.width;
   camera_info_msg.height = image_msg.height;
 
-  if (hasImageSubscribers(worker)) {
-    worker.image_pub->publish(image_msg);
-    worker.camera_info_pub->publish(camera_info_msg);
+  const bool render_debug = hasOverlayImageSubscribers(worker);
+  sensor_msgs::msg::Image debug_overlay;
+  sensor_msgs::msg::Image *debug_overlay_ptr = nullptr;
+  if (render_debug) {
+    debug_overlay = image_msg;
+    debug_overlay_ptr = &debug_overlay;
+    try {
+      drawSkeletonOverlay(worker, debug_overlay);
+    } catch (const cv::Exception &error) {
+      RCLCPP_WARN_THROTTLE(
+          get_logger(), steady_clock, 2000,
+          "Camera serial %u skeleton overlay drawing failed: %s",
+          worker.serial_number, error.what());
+    } catch (const std::exception &error) {
+      RCLCPP_WARN_THROTTLE(
+          get_logger(), steady_clock, 2000,
+          "Camera serial %u skeleton overlay processing failed: %s",
+          worker.serial_number, error.what());
+    }
   }
 
-  if (hasOverlayImageSubscribers(worker)) {
-    publishOverlayImage(worker, image_msg);
+  if (image_processor_) {
+    try {
+      image_processor_(worker.camera_name, image_msg, camera_info_msg,
+                       debug_overlay_ptr);
+    } catch (const std::exception &error) {
+      RCLCPP_WARN_THROTTLE(
+          get_logger(), steady_clock, 2000,
+          "Camera serial %u in-process image processing failed: %s",
+          worker.serial_number, error.what());
+    } catch (...) {
+      RCLCPP_WARN_THROTTLE(
+          get_logger(), steady_clock, 2000,
+          "Camera serial %u in-process image processing failed with an "
+          "unknown exception",
+          worker.serial_number);
+    }
+  }
+
+  if (render_debug) {
+    worker.overlay_image_pub->publish(std::move(debug_overlay));
   }
 }
 
@@ -795,8 +801,8 @@ void ZedBodyFusionNode::drawOverlayBody(cv::Mat &image,
   }
 }
 
-void ZedBodyFusionNode::publishOverlayImage(CameraWorker &worker,
-                                            sensor_msgs::msg::Image image_msg) {
+void ZedBodyFusionNode::drawSkeletonOverlay(
+    CameraWorker &worker, sensor_msgs::msg::Image &image_msg) {
   const auto bodies_err = worker.camera.retrieveBodies(worker.overlay_bodies);
   if (bodies_err != sl::ERROR_CODE::SUCCESS) {
     RCLCPP_WARN_THROTTLE(
@@ -835,8 +841,6 @@ void ZedBodyFusionNode::publishOverlayImage(CameraWorker &worker,
       }
     }
   }
-
-  worker.overlay_image_pub->publish(std::move(image_msg));
 }
 
 void ZedBodyFusionNode::configureRuntimeParameters() {
@@ -897,14 +901,13 @@ void ZedBodyFusionNode::startCameraPublishers() {
         worker->camera.getCameraInformation().serial_number;
     if (opened_serial != worker->serial_number) {
       throw std::runtime_error(
-          "ZED source on port " +
-          std::to_string(streamPortForConfig(config)) + " reports serial " +
-          std::to_string(opened_serial) + ", expected " +
+          "ZED source on port " + std::to_string(streamPortForConfig(config)) +
+          " reports serial " + std::to_string(opened_serial) + ", expected " +
           std::to_string(worker->serial_number));
     }
 
     configurePerCameraBodyPublishing(*worker);
-    configureImagePublishing(*worker);
+    configureImageProcessing(*worker);
     configureOverlayPublishing(*worker);
 
     sl::PositionalTrackingParameters tracking_params;

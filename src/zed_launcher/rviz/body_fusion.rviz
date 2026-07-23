@@ -6,12 +6,12 @@ Panels:
       Expanded:
         - /Global Options1
         - /Status1
-        - /Image1
-        - /Image1/Topic1
-        - /Image2
-        - /Image2/Topic1
-        - /Image3
-        - /Image3/Topic1
+        - /Body Tracking Center1
+        - /Body Tracking Center1/Topic1
+        - /Body Tracking Left1
+        - /Body Tracking Left1/Topic1
+        - /Body Tracking Right1
+        - /Body Tracking Right1/Topic1
         - /Axes1
         - /Axes2
         - /Axes3
@@ -64,42 +64,42 @@ Visualization Manager:
       Max Value: 1
       Median window: 5
       Min Value: 0
-      Name: Image
+      Name: Body Tracking Center
       Normalize Range: true
       Topic:
         Depth: 5
         Durability Policy: Volatile
         History Policy: Keep Last
         Reliability Policy: Best Effort
-        Value: /zed_center/zed_node/rgb/color/rect/skeleton_overlay
+        Value: /zed_center/zed_node/rgb/color/rect/body_tracking_overlay
       Value: true
     - Class: rviz_default_plugins/Image
       Enabled: true
       Max Value: 1
       Median window: 5
       Min Value: 0
-      Name: Image
+      Name: Body Tracking Left
       Normalize Range: true
       Topic:
         Depth: 5
         Durability Policy: Volatile
         History Policy: Keep Last
         Reliability Policy: Best Effort
-        Value: /zed_left/zed_node/rgb/color/rect/skeleton_overlay
+        Value: /zed_left/zed_node/rgb/color/rect/body_tracking_overlay
       Value: true
     - Class: rviz_default_plugins/Image
       Enabled: true
       Max Value: 1
       Median window: 5
       Min Value: 0
-      Name: Image
+      Name: Body Tracking Right
       Normalize Range: true
       Topic:
         Depth: 5
         Durability Policy: Volatile
         History Policy: Keep Last
         Reliability Policy: Best Effort
-        Value: /zed_right/zed_node/rgb/color/rect/skeleton_overlay
+        Value: /zed_right/zed_node/rgb/color/rect/body_tracking_overlay
       Value: true
     - Class: rviz_default_plugins/Axes
       Enabled: true

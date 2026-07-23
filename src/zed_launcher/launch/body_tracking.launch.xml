@@ -35,8 +35,6 @@
   <arg name="publish_frame_id" default="fusion_world" />
   <arg name="output_topic" default="body_trk/skeletons" />
   <arg name="enable_apriltag_fusion" default="true" />
-  <arg name="publish_images" default="$(var enable_apriltag_fusion)" />
-  <arg name="publish_overlay_images" default="$(var debug)" />
   <arg name="publish_per_camera_skeletons" default="$(var debug)" />
   <arg name="overlay_min_confidence" default="$(var confidence_threshold)" />
   <arg name="overlay_max_skeleton_age_sec" default="0.5" />
@@ -93,9 +91,7 @@
 
   <node
     pkg="zed_launcher"
-    exec="zed_body_fusion_node"
-    namespace="zed_fusion"
-    name="zed_body_fusion_node"
+    exec="body_tracking_node"
     output="screen"
   >
     <param name="role" value="$(var role)" />
@@ -115,8 +111,7 @@
     <param name="output_topic" value="$(var output_topic)" />
     <param name="camera_resolution" value="$(var camera_resolution)" />
     <param name="camera_fps" value="$(var camera_fps)" />
-    <param name="publish_images" value="$(var publish_images)" />
-    <param name="publish_overlay_images" value="$(var publish_overlay_images)" />
+    <param name="publish_overlay_images" value="$(var debug)" />
     <param name="publish_per_camera_skeletons" value="$(var publish_per_camera_skeletons)" />
     <param name="overlay_min_confidence" value="$(var overlay_min_confidence)" />
     <param name="overlay_max_skeleton_age_sec" value="$(var overlay_max_skeleton_age_sec)" />
@@ -136,16 +131,10 @@
     />
     <param name="sdk_gpu_id" value="$(var sdk_gpu_id)" />
     <param name="sdk_verbose" value="$(var sdk_verbose)" />
-  </node>
-
-  <node
-    if="$(var enable_apriltag_fusion)"
-    pkg="zed_launcher"
-    exec="apriltag_fusion_node"
-    name="apriltag_fusion_node"
-    output="screen"
-  >
-    <param name="camera_names" value="$(var camera_names)" />
+    <param
+      name="enable_apriltag_fusion"
+      value="$(var enable_apriltag_fusion)"
+    />
     <param name="fusion_frame_id" value="$(var publish_frame_id)" />
     <param name="front_tag_id" value="$(var apriltag_front_tag_id)" />
     <param name="back_tag_id" value="$(var apriltag_back_tag_id)" />
@@ -190,7 +179,7 @@
       value="$(var apriltag_max_detection_rate_hz)"
     />
     <param
-      name="fusion_publish_rate_hz"
+      name="apriltag_fusion_publish_rate_hz"
       value="$(var apriltag_fusion_publish_rate_hz)"
     />
     <param

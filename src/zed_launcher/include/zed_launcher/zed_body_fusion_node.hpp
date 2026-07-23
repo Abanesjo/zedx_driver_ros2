@@ -6,6 +6,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 #include <thread>
@@ -24,8 +25,14 @@ namespace zed_launcher {
 
 class ZedBodyFusionNode final : public rclcpp::Node {
 public:
+  using ImageProcessor = std::function<void(
+      const std::string &, const sensor_msgs::msg::Image &,
+      const sensor_msgs::msg::CameraInfo &, sensor_msgs::msg::Image *)>;
+
   explicit ZedBodyFusionNode(
-      const rclcpp::NodeOptions &options = rclcpp::NodeOptions());
+      const rclcpp::NodeOptions &options = rclcpp::NodeOptions(),
+      ImageProcessor image_processor = {},
+      const std::string &node_namespace = "");
 
   ~ZedBodyFusionNode() override;
 
@@ -41,9 +48,7 @@ private:
     sl::Camera camera;
     sl::Mat image;
     sensor_msgs::msg::CameraInfo camera_info;
-    rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr image_pub;
     rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr overlay_image_pub;
-    rclcpp::Publisher<sensor_msgs::msg::CameraInfo>::SharedPtr camera_info_pub;
     rclcpp::Publisher<zed_msgs::msg::ObjectsStamped>::SharedPtr bodies_pub;
     sl::Bodies overlay_bodies;
     std::thread thread;
@@ -64,12 +69,7 @@ private:
 
   int streamPortForConfig(const sl::FusionConfiguration &config) const;
 
-  std::string
-  cameraNameForConfig(const sl::FusionConfiguration &config) const;
-
-  std::string imageTopicForCamera(const std::string &camera_name) const;
-
-  std::string cameraInfoTopicForCamera(const std::string &camera_name) const;
+  std::string cameraNameForConfig(const sl::FusionConfiguration &config) const;
 
   std::string overlayImageTopicForCamera(const std::string &camera_name) const;
 
@@ -85,13 +85,11 @@ private:
   sensor_msgs::msg::CameraInfo
   makeCameraInfo(sl::Camera &camera, const std::string &frame_id) const;
 
-  void configureImagePublishing(CameraWorker &worker);
+  void configureImageProcessing(CameraWorker &worker);
 
   void configureOverlayPublishing(CameraWorker &worker);
 
   void configurePerCameraBodyPublishing(CameraWorker &worker);
-
-  bool hasImageSubscribers(const CameraWorker &worker) const;
 
   bool hasOverlayImageSubscribers(const CameraWorker &worker) const;
 
@@ -116,8 +114,8 @@ private:
   void drawOverlayBody(cv::Mat &image, const sl::BodyData &body,
                        int8_t body_format) const;
 
-  void publishOverlayImage(CameraWorker &worker,
-                           sensor_msgs::msg::Image image_msg);
+  void drawSkeletonOverlay(CameraWorker &worker,
+                           sensor_msgs::msg::Image &image_msg);
 
   void configureRuntimeParameters();
 
@@ -214,8 +212,6 @@ private:
 
   bool single_body_enabled_ = true;
 
-  bool publish_images_ = false;
-
   bool publish_overlay_images_ = true;
 
   bool publish_per_camera_skeletons_ = false;
@@ -231,6 +227,8 @@ private:
   bool allow_reduced_precision_inference_ = false;
 
   int sdk_verbose_ = 1;
+
+  ImageProcessor image_processor_;
 
   std::vector<CameraSpec> camera_specs_;
 

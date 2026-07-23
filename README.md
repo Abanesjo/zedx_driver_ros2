@@ -102,12 +102,20 @@ docker exec -it zedx_driver_ros2 bash
 ros2 launch zed_launcher body_tracking.launch.xml debug:=true rviz:=true
 ```
 
-Setting `debug:=true` publishes separate per-camera image topics for the
-annotated 2D skeleton and AprilTag axes, plus the 3D skeleton per image and the
-fused 3D skeleton. The AprilTag images use
-`/zed_{left,center,right}/zed_node/rgb/color/rect/apriltag_overlay`; skeleton
-images use the corresponding `skeleton_overlay` suffix.
-Disabling debug is recommended for improving performance.
+Setting `debug:=true` publishes one combined diagnostic image per camera:
+
+```text
+/zed_left/zed_node/rgb/color/rect/body_tracking_overlay
+/zed_center/zed_node/rgb/color/rect/body_tracking_overlay
+/zed_right/zed_node/rgb/color/rect/body_tracking_overlay
+```
+
+Each image contains the camera frame, 2D skeleton, and any detected AprilTag
+outline, ID, and pose axes. The launch no longer publishes raw camera images
+or separate `skeleton_overlay` and `apriltag_overlay` topics. The pristine
+frames and camera calibration stay in-process, so AprilTag pose fusion
+continues when `debug:=false` without publishing any image topics. Disabling
+debug is recommended for improving performance.
 
 6. For the human angle calculation and collision capsules, run:
 ```

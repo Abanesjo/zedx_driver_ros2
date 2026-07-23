@@ -134,9 +134,43 @@ ament_target_dependencies(apriltag_fusion_node
   tf2_ros
 )
 
+# Combined body tracking and AprilTag fusion
+
+add_executable(body_tracking_node
+  src/body_tracking_node.cpp
+  src/zed_body_fusion.cpp
+  src/apriltag_fusion.cpp
+)
+
+target_compile_features(body_tracking_node PRIVATE cxx_std_17)
+
+target_include_directories(body_tracking_node PRIVATE
+  include
+  ${ZED_INCLUDE_DIRS}
+  ${OpenCV_INCLUDE_DIRS}
+  ${CUDAToolkit_INCLUDE_DIRS}
+)
+
+target_link_libraries(body_tracking_node
+  ${ZED_LIBRARIES}
+  ${OpenCV_LIBRARIES}
+  CUDA::cudart
+  ${ZED_LAUNCHER_ARUCO_TARGET}
+)
+
+ament_target_dependencies(body_tracking_node
+  geometry_msgs
+  rclcpp
+  sensor_msgs
+  tf2
+  tf2_ros
+  zed_msgs
+)
+
 install(
   TARGETS
     apriltag_fusion_node
+    body_tracking_node
     zed_body_fusion_node
     zed_skeleton_overlay_node
   DESTINATION lib/${PROJECT_NAME}
@@ -173,6 +207,13 @@ if(BUILD_TESTING)
   ament_add_pytest_test(
     generate_apriltag_prints_test
     test/test_generate_apriltag_prints.py
+    APPEND_ENV PYTHONDONTWRITEBYTECODE=1
+    TIMEOUT 60
+  )
+
+  ament_add_pytest_test(
+    body_tracking_launch_contract_test
+    test/test_body_tracking_launch_contract.py
     APPEND_ENV PYTHONDONTWRITEBYTECODE=1
     TIMEOUT 60
   )
