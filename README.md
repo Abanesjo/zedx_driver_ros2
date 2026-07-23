@@ -15,21 +15,42 @@ The default camera-to-stream mapping matches `src/zed_launcher/calibration/calib
 
 The server binds each camera by serial number, so USB device enumeration does not affect this mapping.
 
-`body_tracking.launch.xml` enables three-camera AprilTag fusion by default. It
-rejects stale or inconsistent detections, fuses the largest agreeing camera set
-using reprojection quality, and falls back to the best single detection.
+`body_tracking.launch.xml` enables three-camera, two-tag fusion by default.
+Front tag ID 0 and back tag ID 1 are both 12 cm `APRILTAG_36h11` markers.
+For each tag, detections from the largest agreeing camera set are fused using
+reprojection quality. When both tags are synchronized, their positions are
+averaged and `tag_frame` uses tag 1's orientation. With one visible tag, the
+last learned front-to-back separation is used. With neither visible, the last
+higher-quality tag estimate is held and rebroadcast.
 
 The resulting frame ownership is:
 
 ```text
-apriltag_0 -> fusion_world -> zed_{left,center,right}_left_camera_optical_frame
+pelvis --static--> tag_frame --dynamic--> fusion_world --static--> cameras
 ```
 
-The AprilTag edge is dynamic; the three camera edges come from
-`calibration.json` and are static. Skeletons and colliders remain message data
-with `header.frame_id=fusion_world`; no joint TF tree is generated. If the robot
-also needs `pelvis -> apriltag_0`, publish that known mounting transform
-separately with a static TF publisher.
+The `pelvis -> tag_frame` mounting edge is optional and must be published by
+the robot as a static transform. The AprilTag node publishes only the dynamic
+`tag_frame -> fusion_world` edge; the three camera edges come from
+`calibration.json`. Skeletons and colliders remain message data with
+`header.frame_id=fusion_world`; no joint TF tree is generated. The equivalent
+pose topic is `/fusion_world_pose_in_tag_frame`.
+
+Tag 1 is assumed to be rotated 180 degrees about tag 0's local y axis.
+`tag_frame` matches tag 1's orientation. Each tag's local +z points inward,
+toward the initial center estimate 3 cm away. The node learns the tag-to-tag
+z separation from synchronized pairs at runtime; that estimate resets on every
+node startup.
+
+Generate actual-size print files for the default tags with:
+
+```bash
+ros2 run zed_launcher generate_apriltag_prints --output-dir ./apriltag_prints
+```
+
+This creates one 600-DPI A4 PNG per tag plus a two-page PDF. Print the PDF at
+100% / Actual Size with all fit-to-page scaling disabled, then verify the
+included 10 cm scale.
 
 ### ZED Box Setup
 On the ZED Box: 
@@ -81,7 +102,12 @@ docker exec -it zedx_driver_ros2 bash
 ros2 launch zed_launcher body_tracking.launch.xml debug:=true rviz:=true
 ```
 
-Setting `debug:=true` publishes as images the annotated 2d skeleton on each camera image, the 3d skeleton per image, and the fused 3d skeleton. Disabling it is recommended for improving performance. 
+Setting `debug:=true` publishes separate per-camera image topics for the
+annotated 2D skeleton and AprilTag axes, plus the 3D skeleton per image and the
+fused 3D skeleton. The AprilTag images use
+`/zed_{left,center,right}/zed_node/rgb/color/rect/apriltag_overlay`; skeleton
+images use the corresponding `skeleton_overlay` suffix.
+Disabling debug is recommended for improving performance.
 
 6. For the human angle calculation and collision capsules, run:
 ```

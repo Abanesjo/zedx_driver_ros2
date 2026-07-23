@@ -41,6 +41,12 @@ install(
   DESTINATION include
 )
 
+install(
+  PROGRAMS scripts/generate_apriltag_prints.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME generate_apriltag_prints
+)
+
 # ZED Body Fusion
 
 add_executable(zed_body_fusion_node
@@ -103,6 +109,7 @@ ament_target_dependencies(zed_skeleton_overlay_node
 
 add_executable(apriltag_fusion_node
   src/apriltag_fusion_node.cpp
+  src/apriltag_fusion.cpp
 )
 
 target_compile_features(apriltag_fusion_node PRIVATE cxx_std_17)
@@ -134,5 +141,41 @@ install(
     zed_skeleton_overlay_node
   DESTINATION lib/${PROJECT_NAME}
 )
+
+if(BUILD_TESTING)
+  find_package(ament_cmake_gtest REQUIRED)
+  find_package(ament_cmake_pytest REQUIRED)
+
+  ament_add_gtest(
+    apriltag_fusion_test
+    test/test_apriltag_fusion.cpp
+    src/apriltag_fusion.cpp
+  )
+  target_compile_features(apriltag_fusion_test PRIVATE cxx_std_17)
+  target_include_directories(apriltag_fusion_test PRIVATE
+    include
+    ${OpenCV_INCLUDE_DIRS}
+  )
+  target_link_libraries(apriltag_fusion_test
+    opencv_core
+    opencv_imgproc
+    opencv_calib3d
+    ${ZED_LAUNCHER_ARUCO_TARGET}
+  )
+  ament_target_dependencies(apriltag_fusion_test
+    geometry_msgs
+    rclcpp
+    sensor_msgs
+    tf2
+    tf2_ros
+  )
+
+  ament_add_pytest_test(
+    generate_apriltag_prints_test
+    test/test_generate_apriltag_prints.py
+    APPEND_ENV PYTHONDONTWRITEBYTECODE=1
+    TIMEOUT 60
+  )
+endif()
 
 ament_package()

@@ -1,10 +1,10 @@
-#include "apriltag_fusion.cpp"
+#include "zed_launcher/apriltag_fusion_node.hpp"
 
 #include <exception>
 #include <memory>
 
-#include <rclcpp/rclcpp.hpp>
 #include <rclcpp/executors/multi_threaded_executor.hpp>
+#include <rclcpp/rclcpp.hpp>
 
 int main(int argc, char **argv) {
   rclcpp::init(argc, argv);

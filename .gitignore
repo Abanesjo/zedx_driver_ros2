@@ -4,3 +4,4 @@ references/*
 build/
 install/
 log/
+src/apriltag_prints/**

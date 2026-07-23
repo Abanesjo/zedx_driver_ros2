@@ -40,13 +40,23 @@
   <arg name="publish_per_camera_skeletons" default="$(var debug)" />
   <arg name="overlay_min_confidence" default="$(var confidence_threshold)" />
   <arg name="overlay_max_skeleton_age_sec" default="0.5" />
-  <arg name="apriltag_target_id" default="0" />
-  <arg name="apriltag_size_m" default="0.06" />
-  <arg name="apriltag_tag_frame_id" default="apriltag_0" />
+  <arg name="apriltag_front_tag_id" default="0" />
+  <arg name="apriltag_back_tag_id" default="1" />
+  <arg name="apriltag_front_tag_size_m" default="0.12" />
+  <arg name="apriltag_back_tag_size_m" default="0.12" />
+  <arg name="apriltag_tag_frame_id" default="tag_frame" />
   <arg
     name="apriltag_pose_topic"
-    default="/fusion_world_pose_in_apriltag"
+    default="/fusion_world_pose_in_tag_frame"
   />
+  <arg name="apriltag_initial_tag_frame_offset_m" default="0.03" />
+  <arg name="apriltag_learn_tag_separation" default="true" />
+  <arg name="apriltag_tag_separation_ema_alpha" default="0.05" />
+  <arg
+    name="apriltag_tag_separation_max_innovation_m"
+    default="0.02"
+  />
+  <arg name="apriltag_debug_axis_length_m" default="0.06" />
   <arg name="apriltag_publish_fusion_pose" default="true" />
   <arg name="apriltag_publish_tf" default="true" />
   <arg name="apriltag_max_detection_rate_hz" default="30.0" />
@@ -137,15 +147,44 @@
   >
     <param name="camera_names" value="$(var camera_names)" />
     <param name="fusion_frame_id" value="$(var publish_frame_id)" />
-    <param name="target_tag_id" value="$(var apriltag_target_id)" />
-    <param name="tag_size_m" value="$(var apriltag_size_m)" />
+    <param name="front_tag_id" value="$(var apriltag_front_tag_id)" />
+    <param name="back_tag_id" value="$(var apriltag_back_tag_id)" />
+    <param
+      name="front_tag_size_m"
+      value="$(var apriltag_front_tag_size_m)"
+    />
+    <param
+      name="back_tag_size_m"
+      value="$(var apriltag_back_tag_size_m)"
+    />
     <param name="tag_frame_id" value="$(var apriltag_tag_frame_id)" />
     <param name="pose_topic" value="$(var apriltag_pose_topic)" />
+    <param
+      name="initial_tag_frame_offset_m"
+      value="$(var apriltag_initial_tag_frame_offset_m)"
+    />
+    <param
+      name="learn_tag_separation"
+      value="$(var apriltag_learn_tag_separation)"
+    />
+    <param
+      name="tag_separation_ema_alpha"
+      value="$(var apriltag_tag_separation_ema_alpha)"
+    />
+    <param
+      name="tag_separation_max_innovation_m"
+      value="$(var apriltag_tag_separation_max_innovation_m)"
+    />
     <param
       name="publish_fusion_pose"
       value="$(var apriltag_publish_fusion_pose)"
     />
     <param name="publish_tf" value="$(var apriltag_publish_tf)" />
+    <param name="publish_debug_images" value="$(var debug)" />
+    <param
+      name="debug_axis_length_m"
+      value="$(var apriltag_debug_axis_length_m)"
+    />
     <param
       name="max_detection_rate_hz"
       value="$(var apriltag_max_detection_rate_hz)"
