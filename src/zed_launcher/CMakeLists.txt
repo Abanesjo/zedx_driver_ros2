@@ -260,6 +260,18 @@ if(BUILD_TESTING)
     zed_msgs
   )
 
+  ament_add_gtest(
+    camera_body_consensus_test
+    test/test_camera_body_consensus.cpp
+  )
+  target_compile_features(camera_body_consensus_test PRIVATE cxx_std_17)
+  target_include_directories(camera_body_consensus_test PRIVATE
+    include
+  )
+  ament_target_dependencies(camera_body_consensus_test
+    zed_msgs
+  )
+
   ament_add_pytest_test(
     generate_apriltag_prints_test
     test/test_generate_apriltag_prints.py

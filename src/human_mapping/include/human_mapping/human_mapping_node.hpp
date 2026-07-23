@@ -85,6 +85,14 @@ bool bodyFormatSupportsJointAngles(int body_format);
 
 BodyPoints canonicalBodyPoints(const Object &obj);
 
+enum class BodyTrackingQuality {
+  Measured,
+  Predicted,
+  Invalid,
+};
+
+BodyTrackingQuality bodyTrackingQuality(const Object &obj);
+
 struct JointAngles {
   std::array<double, kNumJoints> values{};
   std::array<bool, kNumJoints> valid{};
@@ -96,21 +104,64 @@ double wrapAngle(double angle);
 
 JointAngles estimateJointAngles(const BodyPoints &points);
 
-class EMAJumpFilter {
+class TimeAwarePointFilter {
 public:
-  EMAJumpFilter(double alpha, double max_jump, int max_reject_count);
+  TimeAwarePointFilter(double time_constant_sec, double max_speed_mps,
+                       double max_step_m);
 
-  Vec3 update(const Vec3 &x);
+  Vec3 update(const Vec3 &measurement, double dt_sec);
+
+  void reset();
+
+  const std::optional<Vec3> &value() const;
+
+private:
+  double time_constant_sec_;
+  double max_speed_mps_;
+  double max_step_m_;
+  std::optional<Vec3> value_;
+};
+
+class RootRelativeBodyFilter {
+public:
+  RootRelativeBodyFilter(double root_position_time_constant_sec,
+                         double root_velocity_time_constant_sec,
+                         double relative_position_time_constant_sec,
+                         double root_max_speed_mps,
+                         double relative_max_speed_mps, double root_max_step_m,
+                         double relative_max_step_m,
+                         double velocity_decay_time_constant_sec,
+                         double missing_point_hold_sec,
+                         double prediction_timeout_sec);
+
+  BodyPoints update(const BodyPoints &raw_points,
+                    BodyTrackingQuality tracking_quality,
+                    int64_t observation_ns);
 
   void reset();
 
 private:
-  double alpha_;
-  double max_jump_;
-  int max_reject_count_;
-  std::optional<Vec3> value_;
-  int reject_count_ = 0;
-  std::optional<Vec3> last_rejected_;
+  Vec3 updateMeasuredRoot(const Vec3 &measurement, double dt_sec,
+                          int64_t observation_ns);
+
+  Vec3 predictRoot(double dt_sec, int64_t observation_ns);
+
+  bool predictionActive(int64_t observation_ns) const;
+
+  double root_position_time_constant_sec_;
+  double root_velocity_time_constant_sec_;
+  double root_max_speed_mps_;
+  double root_max_step_m_;
+  double velocity_decay_time_constant_sec_;
+  double missing_point_hold_sec_;
+  double prediction_timeout_sec_;
+  std::optional<Vec3> root_;
+  Vec3 root_velocity_{};
+  std::optional<int64_t> last_update_ns_;
+  std::optional<int64_t> last_measured_root_ns_;
+  std::vector<TimeAwarePointFilter> relative_filters_;
+  std::array<std::optional<int64_t>, kNumBody38Points>
+      last_relative_observation_ns_{};
 };
 
 bool shouldResetPointFilters(
@@ -169,9 +220,13 @@ bool hasUsableObservation(const JointAngles &angles,
 
 class CapsuleAnatomyFilter {
 public:
-  explicit CapsuleAnatomyFilter(double max_length_change_fraction = 0.5);
+  explicit CapsuleAnatomyFilter(double max_length_change_fraction = 0.5,
+                                double missing_hold_sec = 0.25);
 
-  std::vector<CapsuleData> update(const std::vector<CapsuleData> &candidates);
+  std::vector<CapsuleData>
+  update(const std::vector<CapsuleData> &candidates,
+         const std::optional<Vec3> &body_root = std::nullopt,
+         std::optional<int64_t> observation_ns = std::nullopt);
 
   void reset();
 
@@ -179,7 +234,10 @@ private:
   bool plausible(const CapsuleData &candidate) const;
 
   double max_length_change_fraction_;
+  double missing_hold_sec_;
   std::unordered_map<std::string, CapsuleData> previous_;
+  std::unordered_map<std::string, int64_t> last_accepted_ns_;
+  std::optional<Vec3> previous_body_root_;
 };
 
 struct MappingResult {
@@ -200,7 +258,7 @@ private:
 
   void warnRejectedBodyFormat(int body_format);
 
-  BodyPoints filteredPoints(const Object &obj);
+  BodyPoints filteredPoints(const Object &obj, int64_t observation_ns);
 
   void preparePointFilters(int body_id, int64_t observation_ns);
 
@@ -305,7 +363,7 @@ private:
 
   double shin_radius_ = 0.065;
 
-  std::vector<EMAJumpFilter> point_filters_;
+  std::unique_ptr<RootRelativeBodyFilter> point_filter_;
 
   std::unique_ptr<CapsuleAnatomyFilter> capsule_filter_;
 

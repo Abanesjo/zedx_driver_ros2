@@ -214,6 +214,7 @@ def generate_launch_description():
                                 "fusion_config_path"
                             ),
                             "fusion_minimum_allowed_cameras": "1",
+                            "camera_body_fallback_minimum_cameras": "1",
                             "publish_per_camera_skeletons": "false",
                             "sender_tracking_enabled": "false",
                             "fusion_tracking_enabled": "true",

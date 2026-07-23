@@ -124,6 +124,7 @@ def test_launch_contract_is_single_camera_fusion_with_canonical_overlay():
 
     assert "body_tracking.launch.xml" in source
     assert '"fusion_minimum_allowed_cameras": "1"' in source
+    assert '"camera_body_fallback_minimum_cameras": "1"' in source
     assert '"publish_per_camera_skeletons": "false"' in source
     assert '"body_fitting_enabled": "true"' in source
     assert 'default_value="HUMAN_BODY_ACCURATE"' in source

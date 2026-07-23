@@ -198,14 +198,16 @@ private:
 
   bool bodyPassesRosFilter(const sl::BodyData &body) const;
 
+  bool bodyPassesMeasuredFilter(const sl::BodyData &body,
+                                bool tracking_available) const;
+
   int bestConfidenceIndex(const std::vector<sl::BodyData> &bodies) const;
 
   int bodyIndexById(const std::vector<sl::BodyData> &bodies, int body_id) const;
 
   int selectedBodyIndex(const std::vector<sl::BodyData> &bodies);
 
-  void copyBodyToRosObject(const sl::Bodies &bodies,
-                           const sl::BodyData &body,
+  void copyBodyToRosObject(const sl::Bodies &bodies, const sl::BodyData &body,
                            zed_msgs::msg::Object &object,
                            bool tracking_available);
 
@@ -215,6 +217,8 @@ private:
                                              const std::string &frame_id,
                                              bool apply_single_body_filter,
                                              bool tracking_available);
+
+  std::optional<zed_msgs::msg::Object> retrieveCameraBodyFallback();
 
   void publishPerCameraBodies();
 
@@ -284,9 +288,25 @@ private:
 
   double single_body_bridge_timeout_sec_ = 0.5;
 
+  double single_body_bridge_max_speed_mps_ = 2.0;
+
+  double camera_body_fallback_consensus_distance_m_ = 0.5;
+
+  double fused_body_max_jump_m_ = 0.5;
+
+  int camera_body_fallback_minimum_cameras_ = 2;
+
   bool single_body_enabled_ = true;
 
+  bool camera_body_fallback_enabled_ = true;
+
+  bool per_camera_bodies_retrieved_this_cycle_ = false;
+
   std::unique_ptr<SingleBodyContinuity> single_body_continuity_;
+
+  std::optional<std::array<double, 3>> last_single_body_position_;
+
+  std::optional<SingleBodyContinuity::TimePoint> last_single_body_position_at_;
 
   bool publish_overlay_images_ = true;
 

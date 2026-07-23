@@ -25,6 +25,11 @@ const std::vector<std::string> kControlledJoints = {
     "right_elbow_joint",
 };
 
+constexpr std::array<const char *, 9> kBodyCapsuleNames = {
+    "torso",      "left_arm",    "right_arm", "left_shoulder", "right_shoulder",
+    "left_thigh", "right_thigh", "left_shin", "right_shin",
+};
+
 constexpr double kMinShoulderYawFlex = 20.0 * kPi / 180.0;
 constexpr double kMaxShoulderYawFlex = 160.0 * kPi / 180.0;
 constexpr double kOverheadSingularity = 15.0 * kPi / 180.0;
@@ -37,6 +42,35 @@ bool validPoint(const Vec3 &p) {
 
 bool validPoint(const std::optional<Vec3> &p) {
   return p.has_value() && validPoint(*p);
+}
+
+double smoothingGain(double time_constant_sec, double dt_sec) {
+  if (!std::isfinite(dt_sec) || dt_sec <= 0.0) {
+    return 0.0;
+  }
+  dt_sec = std::clamp(dt_sec, 1e-3, 0.5);
+  return 1.0 - std::exp(-dt_sec / time_constant_sec);
+}
+
+Vec3 limitVector(const Vec3 &value, double maximum_norm) {
+  const double length = norm(value);
+  if (!std::isfinite(length) || !std::isfinite(maximum_norm) ||
+      maximum_norm <= 0.0) {
+    return {};
+  }
+  if (length <= maximum_norm || length <= kEps) {
+    return value;
+  }
+  return value * (maximum_norm / length);
+}
+
+Vec3 boundedStep(const Vec3 &step, double max_speed_mps, double max_step_m,
+                 double dt_sec) {
+  if (!std::isfinite(dt_sec) || dt_sec <= 0.0) {
+    return {};
+  }
+  const double speed_limit = max_speed_mps * std::clamp(dt_sec, 1e-3, 0.5);
+  return limitVector(step, std::min(speed_limit, max_step_m));
 }
 
 std::optional<double> angleBetween(const Vec3 &a, const Vec3 &b) {
@@ -182,13 +216,26 @@ bool bodyFormatSupportsJointAngles(int body_format) {
   return decodeBodyFormat(body_format) == SkeletonBodyFormat::Body38;
 }
 
+BodyTrackingQuality bodyTrackingQuality(const Object &obj) {
+  // ZED tracking states: OFF=0, OK=1, SEARCHING=2, TERMINATE=3. When
+  // positional tracking is disabled, OFF observations are still measured
+  // camera-frame skeletons and remain usable.
+  if (obj.tracking_state == 1 ||
+      (obj.tracking_state == 0 && !obj.tracking_available)) {
+    return BodyTrackingQuality::Measured;
+  }
+  if (obj.tracking_state == 2) {
+    return BodyTrackingQuality::Predicted;
+  }
+  return BodyTrackingQuality::Invalid;
+}
+
 BodyPoints canonicalBodyPoints(const Object &obj) {
   BodyPoints points{};
 
   auto copy = [&](int destination, int source) {
     if (source < 0 ||
-        static_cast<std::size_t>(source) >=
-            obj.skeleton_3d.keypoints.size()) {
+        static_cast<std::size_t>(source) >= obj.skeleton_3d.keypoints.size()) {
       return;
     }
     const auto &kp = obj.skeleton_3d.keypoints[source].kp;
@@ -217,8 +264,7 @@ BodyPoints canonicalBodyPoints(const Object &obj) {
     copy(kLeftKnee, 12);
     copy(kLeftAnkle, 13);
     if (validPoint(points[kLeftHip]) && validPoint(points[kRightHip])) {
-      points[kPelvis] =
-          0.5 * (*points[kLeftHip] + *points[kRightHip]);
+      points[kPelvis] = 0.5 * (*points[kLeftHip] + *points[kRightHip]);
     }
     break;
 
@@ -383,32 +429,93 @@ std::vector<CapsuleData> buildBodyCapsules(const BodyPoints &points,
   return capsules;
 }
 
-CapsuleAnatomyFilter::CapsuleAnatomyFilter(double max_length_change_fraction)
-    : max_length_change_fraction_(max_length_change_fraction) {
+CapsuleAnatomyFilter::CapsuleAnatomyFilter(double max_length_change_fraction,
+                                           double missing_hold_sec)
+    : max_length_change_fraction_(max_length_change_fraction),
+      missing_hold_sec_(missing_hold_sec) {
   if (!std::isfinite(max_length_change_fraction_) ||
       max_length_change_fraction_ < 0.0 || max_length_change_fraction_ > 1.0) {
     throw std::invalid_argument(
         "Capsule max length change fraction must be in [0, 1]");
   }
+  if (!std::isfinite(missing_hold_sec_) || missing_hold_sec_ < 0.0) {
+    throw std::invalid_argument(
+        "Capsule missing hold duration must be finite and non-negative");
+  }
 }
 
 std::vector<CapsuleData>
-CapsuleAnatomyFilter::update(const std::vector<CapsuleData> &candidates) {
-  std::vector<CapsuleData> filtered;
-  filtered.reserve(candidates.size());
+CapsuleAnatomyFilter::update(const std::vector<CapsuleData> &candidates,
+                             const std::optional<Vec3> &body_root,
+                             std::optional<int64_t> observation_ns) {
+  if (body_root && previous_body_root_) {
+    const Vec3 root_delta = *body_root - *previous_body_root_;
+    for (auto &[name, capsule] : previous_) {
+      (void)name;
+      capsule.a = capsule.a + root_delta;
+      capsule.b = capsule.b + root_delta;
+    }
+  }
+  if (body_root) {
+    previous_body_root_ = body_root;
+  }
+
+  std::unordered_map<std::string, const CapsuleData *> by_name;
+  by_name.reserve(candidates.size());
   for (const auto &candidate : candidates) {
-    const auto previous = previous_.find(candidate.name);
-    if (plausible(candidate)) {
-      previous_[candidate.name] = candidate;
-      filtered.push_back(candidate);
-    } else if (previous != previous_.end()) {
+    by_name[candidate.name] = &candidate;
+  }
+
+  std::vector<CapsuleData> filtered;
+  filtered.reserve(kBodyCapsuleNames.size());
+  for (const char *name : kBodyCapsuleNames) {
+    const auto candidate = by_name.find(name);
+    auto previous = previous_.find(name);
+    if (candidate != by_name.end() && plausible(*candidate->second)) {
+      previous_[name] = *candidate->second;
+      if (observation_ns) {
+        last_accepted_ns_[name] = *observation_ns;
+      }
+      filtered.push_back(*candidate->second);
+      continue;
+    }
+
+    if (previous == previous_.end()) {
+      continue;
+    }
+
+    // A present but anatomically implausible segment is not a dropout. Keep
+    // its last plausible root-relative shape until the continuously bounded
+    // point filter brings the candidate back inside the length limits.
+    if (candidate != by_name.end()) {
       filtered.push_back(previous->second);
+      continue;
+    }
+
+    bool within_hold = true;
+    if (observation_ns) {
+      const auto last_accepted = last_accepted_ns_.find(name);
+      within_hold =
+          last_accepted != last_accepted_ns_.end() &&
+          *observation_ns >= last_accepted->second &&
+          static_cast<double>(*observation_ns - last_accepted->second) * 1e-9 <=
+              missing_hold_sec_;
+    }
+    if (within_hold) {
+      filtered.push_back(previous->second);
+    } else {
+      previous_.erase(previous);
+      last_accepted_ns_.erase(name);
     }
   }
   return filtered;
 }
 
-void CapsuleAnatomyFilter::reset() { previous_.clear(); }
+void CapsuleAnatomyFilter::reset() {
+  previous_.clear();
+  last_accepted_ns_.clear();
+  previous_body_root_.reset();
+}
 
 bool CapsuleAnatomyFilter::plausible(const CapsuleData &candidate) const {
   const double length = norm(candidate.a - candidate.b);
@@ -460,47 +567,203 @@ bool hasUsableObservation(const JointAngles &angles,
   return false;
 }
 
-EMAJumpFilter::EMAJumpFilter(double alpha, double max_jump,
-                             int max_reject_count)
-    : alpha_(alpha), max_jump_(max_jump), max_reject_count_(max_reject_count) {}
+TimeAwarePointFilter::TimeAwarePointFilter(double time_constant_sec,
+                                           double max_speed_mps,
+                                           double max_step_m)
+    : time_constant_sec_(time_constant_sec), max_speed_mps_(max_speed_mps),
+      max_step_m_(max_step_m) {
+  if (!std::isfinite(time_constant_sec_) || time_constant_sec_ <= 0.0 ||
+      !std::isfinite(max_speed_mps_) || max_speed_mps_ <= 0.0 ||
+      !std::isfinite(max_step_m_) || max_step_m_ <= 0.0) {
+    throw std::invalid_argument(
+        "Point filter time constant, speed and step limits must be finite and "
+        "positive");
+  }
+}
 
-Vec3 EMAJumpFilter::update(const Vec3 &x) {
+Vec3 TimeAwarePointFilter::update(const Vec3 &measurement, double dt_sec) {
   if (!value_) {
-    value_ = x;
-    reject_count_ = 0;
-    last_rejected_.reset();
+    value_ = measurement;
     return *value_;
   }
 
-  const double jump = norm(x - *value_);
-  if (jump > max_jump_) {
-    if (!last_rejected_) {
-      reject_count_ = 1;
-      last_rejected_ = x;
-      return *value_;
-    }
-
-    const double spread = norm(x - *last_rejected_);
-    reject_count_ = spread <= max_jump_ ? reject_count_ + 1 : 1;
-    last_rejected_ = x;
-    if (reject_count_ >= max_reject_count_) {
-      value_ = x;
-      reject_count_ = 0;
-      last_rejected_.reset();
-    }
-    return *value_;
-  }
-
-  reject_count_ = 0;
-  last_rejected_.reset();
-  value_ = x * alpha_ + *value_ * (1.0 - alpha_);
+  const Vec3 correction =
+      (measurement - *value_) * smoothingGain(time_constant_sec_, dt_sec);
+  value_ =
+      *value_ + boundedStep(correction, max_speed_mps_, max_step_m_, dt_sec);
   return *value_;
 }
 
-void EMAJumpFilter::reset() {
-  value_.reset();
-  reject_count_ = 0;
-  last_rejected_.reset();
+void TimeAwarePointFilter::reset() { value_.reset(); }
+
+const std::optional<Vec3> &TimeAwarePointFilter::value() const {
+  return value_;
+}
+
+RootRelativeBodyFilter::RootRelativeBodyFilter(
+    double root_position_time_constant_sec,
+    double root_velocity_time_constant_sec,
+    double relative_position_time_constant_sec, double root_max_speed_mps,
+    double relative_max_speed_mps, double root_max_step_m,
+    double relative_max_step_m, double velocity_decay_time_constant_sec,
+    double missing_point_hold_sec, double prediction_timeout_sec)
+    : root_position_time_constant_sec_(root_position_time_constant_sec),
+      root_velocity_time_constant_sec_(root_velocity_time_constant_sec),
+      root_max_speed_mps_(root_max_speed_mps),
+      root_max_step_m_(root_max_step_m),
+      velocity_decay_time_constant_sec_(velocity_decay_time_constant_sec),
+      missing_point_hold_sec_(missing_point_hold_sec),
+      prediction_timeout_sec_(prediction_timeout_sec) {
+  if (!std::isfinite(root_position_time_constant_sec_) ||
+      root_position_time_constant_sec_ <= 0.0 ||
+      !std::isfinite(root_velocity_time_constant_sec_) ||
+      root_velocity_time_constant_sec_ <= 0.0 ||
+      !std::isfinite(root_max_speed_mps_) || root_max_speed_mps_ <= 0.0 ||
+      !std::isfinite(root_max_step_m_) || root_max_step_m_ <= 0.0 ||
+      !std::isfinite(velocity_decay_time_constant_sec_) ||
+      velocity_decay_time_constant_sec_ <= 0.0 ||
+      !std::isfinite(missing_point_hold_sec_) ||
+      missing_point_hold_sec_ < 0.0 ||
+      !std::isfinite(prediction_timeout_sec_) ||
+      prediction_timeout_sec_ < 0.0) {
+    throw std::invalid_argument(
+        "Root-relative body filter parameters must be finite and valid");
+  }
+
+  relative_filters_.reserve(kNumBody38Points);
+  for (std::size_t index = 0; index < kNumBody38Points; ++index) {
+    relative_filters_.emplace_back(relative_position_time_constant_sec,
+                                   relative_max_speed_mps, relative_max_step_m);
+  }
+}
+
+BodyPoints RootRelativeBodyFilter::update(const BodyPoints &raw_points,
+                                          BodyTrackingQuality tracking_quality,
+                                          int64_t observation_ns) {
+  if (last_update_ns_ && observation_ns < *last_update_ns_) {
+    reset();
+  }
+
+  double dt_sec = 1.0 / 30.0;
+  if (last_update_ns_ && observation_ns > *last_update_ns_) {
+    dt_sec = static_cast<double>(observation_ns - *last_update_ns_) * 1e-9;
+  } else if (last_update_ns_) {
+    dt_sec = 0.0;
+  }
+  if (dt_sec > 0.0) {
+    dt_sec = std::clamp(dt_sec, 1e-3, 0.5);
+  }
+
+  const bool measured = tracking_quality == BodyTrackingQuality::Measured &&
+                        validPoint(raw_points[kPelvis]);
+  if (measured) {
+    updateMeasuredRoot(*raw_points[kPelvis], dt_sec, observation_ns);
+  } else if (root_) {
+    predictRoot(dt_sec, observation_ns);
+  }
+
+  BodyPoints filtered{};
+  if (!root_) {
+    last_update_ns_ = observation_ns;
+    return filtered;
+  }
+  filtered[kPelvis] = *root_;
+
+  const bool predicted = tracking_quality == BodyTrackingQuality::Predicted &&
+                         predictionActive(observation_ns);
+  for (std::size_t index = 1; index < kNumBody38Points; ++index) {
+    if (measured && validPoint(raw_points[index])) {
+      relative_filters_[index].update(*raw_points[index] - *raw_points[kPelvis],
+                                      dt_sec);
+      last_relative_observation_ns_[index] = observation_ns;
+    } else if (predicted && relative_filters_[index].value()) {
+      // Predicted poses deliberately retain the last measured articulation
+      // while the shared root moves. Start the missing-point grace period only
+      // after measured tracking resumes.
+      last_relative_observation_ns_[index] = observation_ns;
+    }
+
+    const auto &relative = relative_filters_[index].value();
+    const auto &last_observed = last_relative_observation_ns_[index];
+    if (!relative || !last_observed || observation_ns < *last_observed) {
+      continue;
+    }
+    const double age_sec =
+        static_cast<double>(observation_ns - *last_observed) * 1e-9;
+    if (age_sec <= missing_point_hold_sec_) {
+      filtered[index] = *root_ + *relative;
+    }
+  }
+
+  last_update_ns_ = observation_ns;
+  return filtered;
+}
+
+void RootRelativeBodyFilter::reset() {
+  root_.reset();
+  root_velocity_ = {};
+  last_update_ns_.reset();
+  last_measured_root_ns_.reset();
+  for (auto &filter : relative_filters_) {
+    filter.reset();
+  }
+  last_relative_observation_ns_.fill(std::nullopt);
+}
+
+Vec3 RootRelativeBodyFilter::updateMeasuredRoot(const Vec3 &measurement,
+                                                double dt_sec,
+                                                int64_t observation_ns) {
+  if (!root_) {
+    root_ = measurement;
+    root_velocity_ = {};
+    last_measured_root_ns_ = observation_ns;
+    return *root_;
+  }
+  if (dt_sec <= 0.0) {
+    last_measured_root_ns_ = observation_ns;
+    return *root_;
+  }
+
+  const Vec3 previous = *root_;
+  const Vec3 predicted = previous + root_velocity_ * dt_sec;
+  const Vec3 candidate =
+      predicted + (measurement - predicted) *
+                      smoothingGain(root_position_time_constant_sec_, dt_sec);
+  const Vec3 displacement = boundedStep(
+      candidate - previous, root_max_speed_mps_, root_max_step_m_, dt_sec);
+  root_ = previous + displacement;
+
+  const Vec3 observed_velocity = displacement * (1.0 / dt_sec);
+  const double velocity_gain =
+      smoothingGain(root_velocity_time_constant_sec_, dt_sec);
+  root_velocity_ = root_velocity_ * (1.0 - velocity_gain) +
+                   observed_velocity * velocity_gain;
+  root_velocity_ = limitVector(root_velocity_, root_max_speed_mps_);
+  last_measured_root_ns_ = observation_ns;
+  return *root_;
+}
+
+Vec3 RootRelativeBodyFilter::predictRoot(double dt_sec,
+                                         int64_t observation_ns) {
+  if (!root_ || !predictionActive(observation_ns)) {
+    root_velocity_ = {};
+    return root_.value_or(Vec3{});
+  }
+
+  const Vec3 displacement = boundedStep(
+      root_velocity_ * dt_sec, root_max_speed_mps_, root_max_step_m_, dt_sec);
+  root_ = *root_ + displacement;
+  root_velocity_ =
+      root_velocity_ * std::exp(-dt_sec / velocity_decay_time_constant_sec_);
+  return *root_;
+}
+
+bool RootRelativeBodyFilter::predictionActive(int64_t observation_ns) const {
+  if (!last_measured_root_ns_ || observation_ns < *last_measured_root_ns_) {
+    return false;
+  }
+  return static_cast<double>(observation_ns - *last_measured_root_ns_) * 1e-9 <=
+         prediction_timeout_sec_;
 }
 
 bool shouldResetPointFilters(
@@ -582,15 +845,32 @@ HumanMappingNode::HumanMappingNode() : Node("human_mapping_node") {
   min_confidence_ = declare_parameter<double>("min_confidence", 70.0);
   require_body_38_ = declare_parameter<bool>("require_body_38", false);
 
-  const double point_alpha = declare_parameter<double>("point_ema_alpha", 0.30);
-  const double point_max_jump =
-      declare_parameter<double>("point_max_jump", 0.6);
-  const int point_max_reject_count =
-      declare_parameter<int>("point_max_reject_count", 3);
+  const double root_position_time_constant_sec =
+      declare_parameter<double>("root_position_time_constant_sec", 0.12);
+  const double root_velocity_time_constant_sec =
+      declare_parameter<double>("root_velocity_time_constant_sec", 0.30);
+  const double relative_position_time_constant_sec =
+      declare_parameter<double>("relative_position_time_constant_sec", 0.10);
+  const double root_max_speed_mps =
+      declare_parameter<double>("root_max_speed_mps", 3.0);
+  const double relative_max_speed_mps =
+      declare_parameter<double>("relative_max_speed_mps", 6.0);
+  const double root_max_step_m =
+      declare_parameter<double>("root_max_step_m", 0.25);
+  const double relative_max_step_m =
+      declare_parameter<double>("relative_max_step_m", 0.25);
+  const double root_velocity_decay_time_constant_sec =
+      declare_parameter<double>("root_velocity_decay_time_constant_sec", 0.35);
+  const double missing_point_hold_sec =
+      declare_parameter<double>("missing_point_hold_sec", 0.25);
+  const double point_prediction_timeout_sec =
+      declare_parameter<double>("point_prediction_timeout_sec", 0.50);
   point_filter_reset_gap_sec_ =
       declare_parameter<double>("point_filter_reset_gap_sec", 0.5);
   const double capsule_max_length_change_fraction =
       declare_parameter<double>("capsule_max_length_change_fraction", 0.5);
+  const double capsule_missing_hold_sec =
+      declare_parameter<double>("capsule_missing_hold_sec", 0.25);
   const double angle_alpha = declare_parameter<double>("angle_ema_alpha", 0.25);
   const double angle_max_rate_deg =
       declare_parameter<double>("angle_max_rate_deg", 100.0);
@@ -649,12 +929,14 @@ HumanMappingNode::HumanMappingNode() : Node("human_mapping_node") {
         "Parameter 'point_filter_reset_gap_sec' must be finite and positive");
   }
 
-  for (std::size_t i = 0; i < kNumBody38Points; ++i) {
-    point_filters_.emplace_back(point_alpha, point_max_jump,
-                                point_max_reject_count);
-  }
+  point_filter_ = std::make_unique<RootRelativeBodyFilter>(
+      root_position_time_constant_sec, root_velocity_time_constant_sec,
+      relative_position_time_constant_sec, root_max_speed_mps,
+      relative_max_speed_mps, root_max_step_m, relative_max_step_m,
+      root_velocity_decay_time_constant_sec, missing_point_hold_sec,
+      point_prediction_timeout_sec);
   capsule_filter_ = std::make_unique<CapsuleAnatomyFilter>(
-      capsule_max_length_change_fraction);
+      capsule_max_length_change_fraction, capsule_missing_hold_sec);
   angle_filter_ =
       std::make_unique<AngleFilter>(angle_alpha, angle_max_rate_deg);
 
@@ -697,14 +979,21 @@ void HumanMappingNode::skeletonCallback(const ObjectsStamped::SharedPtr msg) {
   }
 
   const int64_t now_ns = now().nanoseconds();
-  preparePointFilters(obj->label_id, now_ns);
-  const auto points = filteredPoints(*obj);
+  int64_t observation_ns =
+      static_cast<int64_t>(msg->header.stamp.sec) * 1'000'000'000LL +
+      static_cast<int64_t>(msg->header.stamp.nanosec);
+  if (observation_ns <= 0) {
+    observation_ns = now_ns;
+  }
+  preparePointFilters(obj->label_id, observation_ns);
+  const auto points = filteredPoints(*obj, observation_ns);
   JointAngles raw_angles;
   const bool estimate_angles = bodyFormatSupportsJointAngles(obj->body_format);
   if (estimate_angles) {
     raw_angles = estimateJointAngles(points);
   }
-  auto capsules = capsule_filter_->update(buildCapsules(points));
+  auto capsules = capsule_filter_->update(buildCapsules(points),
+                                          points[kPelvis], observation_ns);
   if (!hasUsableObservation(raw_angles, capsules)) {
     return;
   }
@@ -735,6 +1024,9 @@ const Object *HumanMappingNode::selectBody(const ObjectsStamped &msg) {
   double best_confidence = -1.0;
   for (const auto &obj : msg.objects) {
     if (!obj.skeleton_available) {
+      continue;
+    }
+    if (bodyTrackingQuality(obj) == BodyTrackingQuality::Invalid) {
       continue;
     }
     const auto body_format = decodeBodyFormat(obj.body_format);
@@ -776,15 +1068,11 @@ void HumanMappingNode::warnRejectedBodyFormat(int body_format) {
   }
 }
 
-BodyPoints HumanMappingNode::filteredPoints(const Object &obj) {
+BodyPoints HumanMappingNode::filteredPoints(const Object &obj,
+                                            int64_t observation_ns) {
   const BodyPoints raw_points = canonicalBodyPoints(obj);
-  BodyPoints points{};
-  for (std::size_t idx = 0; idx < kNumBody38Points; ++idx) {
-    if (validPoint(raw_points[idx])) {
-      points[idx] = point_filters_[idx].update(*raw_points[idx]);
-    }
-  }
-  return points;
+  return point_filter_->update(raw_points, bodyTrackingQuality(obj),
+                               observation_ns);
 }
 
 void HumanMappingNode::preparePointFilters(int body_id,
@@ -792,9 +1080,7 @@ void HumanMappingNode::preparePointFilters(int body_id,
   if (shouldResetPointFilters(filtered_body_id_, last_point_observation_ns_,
                               body_id, observation_ns,
                               point_filter_reset_gap_sec_)) {
-    for (auto &filter : point_filters_) {
-      filter.reset();
-    }
+    point_filter_->reset();
     capsule_filter_->reset();
   }
   filtered_body_id_ = body_id;

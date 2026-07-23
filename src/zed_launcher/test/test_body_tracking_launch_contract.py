@@ -63,6 +63,11 @@ def test_continuity_and_apriltag_defaults_and_parameter_plumbing():
         "single_body_switch_frames": "30",
         "single_body_logical_id": "0",
         "single_body_bridge_timeout_sec": "0.5",
+        "single_body_bridge_max_speed_mps": "2.0",
+        "camera_body_fallback_enabled": "true",
+        "camera_body_fallback_minimum_cameras": "2",
+        "camera_body_fallback_consensus_distance_m": "0.5",
+        "fused_body_max_jump_m": "0.5",
         "body_prediction_timeout_sec": "1.0",
         "depth_mode": "NEURAL",
         "fusion_skeleton_smoothing": "0.1",
@@ -112,6 +117,15 @@ def test_continuity_and_apriltag_defaults_and_parameter_plumbing():
         "single_body_logical_id": "single_body_logical_id",
         "single_body_bridge_timeout_sec":
             "single_body_bridge_timeout_sec",
+        "single_body_bridge_max_speed_mps":
+            "single_body_bridge_max_speed_mps",
+        "camera_body_fallback_enabled":
+            "camera_body_fallback_enabled",
+        "camera_body_fallback_minimum_cameras":
+            "camera_body_fallback_minimum_cameras",
+        "camera_body_fallback_consensus_distance_m":
+            "camera_body_fallback_consensus_distance_m",
+        "fused_body_max_jump_m": "fused_body_max_jump_m",
         "fusion_publish_rate_hz": "fusion_publish_rate_hz",
         "fusion_diagnostics_rate_hz": "fusion_diagnostics_rate_hz",
         "body_prediction_timeout_sec": "body_prediction_timeout_sec",

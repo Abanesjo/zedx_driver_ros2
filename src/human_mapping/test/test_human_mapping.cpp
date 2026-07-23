@@ -120,9 +120,9 @@ void expectVecNear(const Vec3 &actual, const Vec3 &expected,
 }
 
 void setObjectPoint(Object &object, std::size_t index, const Vec3 &point) {
-  object.skeleton_3d.keypoints[index].kp = {
-      static_cast<float>(point.x), static_cast<float>(point.y),
-      static_cast<float>(point.z)};
+  object.skeleton_3d.keypoints[index].kp = {static_cast<float>(point.x),
+                                            static_cast<float>(point.y),
+                                            static_cast<float>(point.z)};
 }
 
 Object encodePose(const BodyPoints &points, int body_format) {
@@ -225,8 +225,7 @@ TEST(BodyFormat, AllSupportedFormatsBuildEquivalentCapsules) {
   for (const int body_format : {0, 1, 2}) {
     const BodyPoints canonical =
         canonicalBodyPoints(encodePose(source, body_format));
-    const auto capsules =
-        buildBodyCapsules(canonical, BodyCapsuleConfig{});
+    const auto capsules = buildBodyCapsules(canonical, BodyCapsuleConfig{});
     ASSERT_EQ(capsules.size(), reference.size())
         << "body_format=" << body_format;
     for (std::size_t index = 0; index < reference.size(); ++index) {
@@ -427,6 +426,22 @@ TEST(CapsuleAnatomyFilter, HoldsSuddenBoneLengthChangeWithinAbsoluteBounds) {
   expectVecNear(held.front().b, valid.b);
 }
 
+TEST(CapsuleAnatomyFilter, MissingSegmentFollowsRootDuringBoundedGrace) {
+  CapsuleAnatomyFilter filter(0.5, 0.25);
+  const CapsuleData valid{"torso", {0.0, 0.0, 1.0}, {0.0, 0.0, 1.5}, 0.15};
+  constexpr int64_t kSecond = 1'000'000'000LL;
+
+  ASSERT_EQ(filter.update({valid}, Vec3{0.0, 0.0, 1.0}, kSecond).size(), 1U);
+  const auto translated =
+      filter.update({}, Vec3{0.2, -0.1, 1.0}, kSecond + 100'000'000LL);
+  ASSERT_EQ(translated.size(), 1U);
+  expectVecNear(translated.front().a, Vec3{0.2, -0.1, 1.0});
+  expectVecNear(translated.front().b, Vec3{0.2, -0.1, 1.5});
+
+  EXPECT_TRUE(
+      filter.update({}, Vec3{0.3, -0.1, 1.0}, kSecond + 300'000'001LL).empty());
+}
+
 TEST(MappingObservation, CompletelyInvalidSkeletonDoesNotRefreshState) {
   JointAngles angles;
   std::vector<CapsuleData> capsules;
@@ -444,16 +459,143 @@ TEST(MappingObservation, CompletelyInvalidSkeletonDoesNotRefreshState) {
   EXPECT_TRUE(hasUsableObservation(angles, capsules));
 }
 
-TEST(EMAJumpFilter, ResetDropsStateFromThePreviousTrack) {
-  EMAJumpFilter filter(0.30, 0.60, 3);
+TEST(TimeAwarePointFilter, RepeatedOutlierIsSlewLimitedAndNeverSnaps) {
+  TimeAwarePointFilter filter(0.10, 2.0, 0.25);
   const Vec3 previous_track{0.0, 0.0, 1.0};
   const Vec3 next_track{4.0, 0.0, 1.0};
 
-  expectVecNear(filter.update(previous_track), previous_track);
-  expectVecNear(filter.update(next_track), previous_track);
+  expectVecNear(filter.update(previous_track, 0.05), previous_track);
+  Vec3 previous = previous_track;
+  for (int sample = 0; sample < 4; ++sample) {
+    const Vec3 output = filter.update(next_track, 0.05);
+    EXPECT_LE(norm(output - previous), 0.100000001);
+    EXPECT_LT(output.x, next_track.x);
+    previous = output;
+  }
 
   filter.reset();
-  expectVecNear(filter.update(next_track), next_track);
+  expectVecNear(filter.update(next_track, 0.05), next_track);
+}
+
+TEST(BodyTrackingQuality, SeparatesMeasuredPredictedAndTerminalStates) {
+  Object object;
+  object.tracking_available = true;
+
+  object.tracking_state = 1;
+  EXPECT_EQ(bodyTrackingQuality(object), BodyTrackingQuality::Measured);
+  object.tracking_state = 2;
+  EXPECT_EQ(bodyTrackingQuality(object), BodyTrackingQuality::Predicted);
+  object.tracking_state = 3;
+  EXPECT_EQ(bodyTrackingQuality(object), BodyTrackingQuality::Invalid);
+  object.tracking_state = 0;
+  EXPECT_EQ(bodyTrackingQuality(object), BodyTrackingQuality::Invalid);
+  object.tracking_available = false;
+  EXPECT_EQ(bodyTrackingQuality(object), BodyTrackingQuality::Measured);
+}
+
+TEST(RootRelativeBodyFilter, IgnoresTranslatedSearchingKeypoints) {
+  auto make_filter = [] {
+    return RootRelativeBodyFilter(0.12, 0.30, 0.10, 3.0, 6.0, 0.25, 0.25, 0.35,
+                                  0.25, 0.50);
+  };
+  auto positive_filter = make_filter();
+  auto negative_filter = make_filter();
+  constexpr int64_t kSecond = 1'000'000'000LL;
+
+  BodyPoints measured = makePose();
+  BodyPoints moved = measured;
+  for (auto &point : moved) {
+    if (point) {
+      *point = *point + Vec3{0.1, 0.0, 0.0};
+    }
+  }
+  for (auto *filter : {&positive_filter, &negative_filter}) {
+    filter->update(measured, BodyTrackingQuality::Measured, kSecond);
+    filter->update(moved, BodyTrackingQuality::Measured,
+                   kSecond + 100'000'000LL);
+  }
+
+  BodyPoints positive_prediction = moved;
+  BodyPoints negative_prediction = moved;
+  for (auto &point : positive_prediction) {
+    if (point) {
+      *point = *point + Vec3{5.0, 0.0, 0.0};
+    }
+  }
+  for (auto &point : negative_prediction) {
+    if (point) {
+      *point = *point + Vec3{-5.0, 0.0, 0.0};
+    }
+  }
+
+  const auto positive = positive_filter.update(positive_prediction,
+                                               BodyTrackingQuality::Predicted,
+                                               kSecond + 200'000'000LL);
+  const auto negative = negative_filter.update(negative_prediction,
+                                               BodyTrackingQuality::Predicted,
+                                               kSecond + 200'000'000LL);
+  ASSERT_TRUE(positive[kPelvis]);
+  ASSERT_TRUE(negative[kPelvis]);
+  expectVecNear(*positive[kPelvis], *negative[kPelvis]);
+  EXPECT_LT(norm(*positive[kPelvis] - *moved[kPelvis]), 0.25);
+}
+
+TEST(RootRelativeBodyFilter, MissingEndpointMovesWithMeasuredRoot) {
+  RootRelativeBodyFilter filter(0.12, 0.30, 0.10, 3.0, 6.0, 0.25, 0.25, 0.35,
+                                0.25, 0.50);
+  constexpr int64_t kSecond = 1'000'000'000LL;
+  const BodyPoints first_pose = makePose();
+  const auto first =
+      filter.update(first_pose, BodyTrackingQuality::Measured, kSecond);
+
+  BodyPoints second_pose = first_pose;
+  for (auto &point : second_pose) {
+    if (point) {
+      *point = *point + Vec3{0.2, 0.0, 0.0};
+    }
+  }
+  second_pose[kLeftWrist].reset();
+  const auto second = filter.update(second_pose, BodyTrackingQuality::Measured,
+                                    kSecond + 100'000'000LL);
+
+  ASSERT_TRUE(first[kPelvis]);
+  ASSERT_TRUE(first[kLeftWrist]);
+  ASSERT_TRUE(second[kPelvis]);
+  ASSERT_TRUE(second[kLeftWrist]);
+  expectVecNear(*second[kLeftWrist] - *first[kLeftWrist],
+                *second[kPelvis] - *first[kPelvis]);
+}
+
+TEST(RootRelativeBodyFilter, DuplicateTimestampsDoNotAdvancePrediction) {
+  RootRelativeBodyFilter filter(0.12, 0.30, 0.10, 3.0, 6.0, 0.25, 0.25, 0.35,
+                                0.25, 0.50);
+  constexpr int64_t kSecond = 1'000'000'000LL;
+  BodyPoints first_pose = makePose();
+  filter.update(first_pose, BodyTrackingQuality::Measured, kSecond);
+
+  BodyPoints moved_pose = first_pose;
+  for (auto &point : moved_pose) {
+    if (point) {
+      *point = *point + Vec3{0.2, 0.0, 0.0};
+    }
+  }
+  const auto moved = filter.update(moved_pose, BodyTrackingQuality::Measured,
+                                   kSecond + 100'000'000LL);
+  ASSERT_TRUE(moved[kPelvis]);
+
+  BodyPoints searching_pose = moved_pose;
+  for (auto &point : searching_pose) {
+    if (point) {
+      *point = *point + Vec3{5.0, 0.0, 0.0};
+    }
+  }
+  for (int duplicate = 0; duplicate < 10; ++duplicate) {
+    const auto held =
+        filter.update(searching_pose, BodyTrackingQuality::Predicted,
+                      kSecond + 100'000'000LL);
+    ASSERT_TRUE(held[kPelvis]);
+    expectVecNear(*held[kPelvis], *moved[kPelvis]);
+  }
 }
 
 TEST(PointFilterResetPolicy, ResetsOnIdentityChangeOrObservationGap) {
@@ -572,10 +714,27 @@ TEST_F(HumanMappingNodeDefaultsTest, MatchesG1ManualCommandContract) {
   EXPECT_EQ(node->get_parameter("bias").as_double_array(), expected_bias);
   EXPECT_DOUBLE_EQ(node->get_parameter("publish_rate_hz").as_double(), 30.0);
   EXPECT_DOUBLE_EQ(
+      node->get_parameter("root_position_time_constant_sec").as_double(), 0.12);
+  EXPECT_DOUBLE_EQ(
+      node->get_parameter("root_velocity_time_constant_sec").as_double(), 0.30);
+  EXPECT_DOUBLE_EQ(
+      node->get_parameter("relative_position_time_constant_sec").as_double(),
+      0.10);
+  EXPECT_DOUBLE_EQ(node->get_parameter("root_max_speed_mps").as_double(), 3.0);
+  EXPECT_DOUBLE_EQ(node->get_parameter("relative_max_speed_mps").as_double(),
+                   6.0);
+  EXPECT_DOUBLE_EQ(node->get_parameter("root_max_step_m").as_double(), 0.25);
+  EXPECT_DOUBLE_EQ(node->get_parameter("relative_max_step_m").as_double(),
+                   0.25);
+  EXPECT_DOUBLE_EQ(
+      node->get_parameter("point_prediction_timeout_sec").as_double(), 0.50);
+  EXPECT_DOUBLE_EQ(
       node->get_parameter("point_filter_reset_gap_sec").as_double(), 0.5);
   EXPECT_DOUBLE_EQ(
       node->get_parameter("capsule_max_length_change_fraction").as_double(),
       0.5);
+  EXPECT_DOUBLE_EQ(node->get_parameter("capsule_missing_hold_sec").as_double(),
+                   0.25);
   EXPECT_FALSE(node->get_parameter("require_body_38").as_bool());
   EXPECT_EQ(node->get_parameter("collider_topic").as_string(),
             "/human/body_colliders");

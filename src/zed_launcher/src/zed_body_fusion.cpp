@@ -1,6 +1,7 @@
 #include "zed_launcher/zed_body_fusion_node.hpp"
 
 #include "zed_launcher/body_format_utils.hpp"
+#include "zed_launcher/camera_body_consensus.hpp"
 #include "zed_launcher/skeleton_draw_utils.hpp"
 
 #include <algorithm>
@@ -392,8 +393,8 @@ void ZedBodyFusionNode::loadParameters() {
       declare_parameter<std::string>("body_model", "HUMAN_BODY_ACCURATE"));
   body_format_ =
       parseBodyFormat(declare_parameter<std::string>("body_format", "BODY_18"));
-  depth_mode_ = parseDepthMode(
-      declare_parameter<std::string>("depth_mode", "NEURAL"));
+  depth_mode_ =
+      parseDepthMode(declare_parameter<std::string>("depth_mode", "NEURAL"));
   camera_resolution_ = parseResolution(
       declare_parameter<std::string>("camera_resolution", "HD1080"));
   fusion_reference_frame_ = parseFusionReferenceFrame(
@@ -419,10 +420,19 @@ void ZedBodyFusionNode::loadParameters() {
       declare_parameter<double>("body_prediction_timeout_sec", 1.0);
   single_body_switch_frames_ =
       declare_parameter<int>("single_body_switch_frames", 30);
-  single_body_logical_id_ =
-      declare_parameter<int>("single_body_logical_id", 0);
+  single_body_logical_id_ = declare_parameter<int>("single_body_logical_id", 0);
   single_body_bridge_timeout_sec_ =
       declare_parameter<double>("single_body_bridge_timeout_sec", 0.5);
+  single_body_bridge_max_speed_mps_ =
+      declare_parameter<double>("single_body_bridge_max_speed_mps", 2.0);
+  camera_body_fallback_enabled_ =
+      declare_parameter<bool>("camera_body_fallback_enabled", true);
+  camera_body_fallback_minimum_cameras_ =
+      declare_parameter<int>("camera_body_fallback_minimum_cameras", 2);
+  camera_body_fallback_consensus_distance_m_ = declare_parameter<double>(
+      "camera_body_fallback_consensus_distance_m", 0.5);
+  fused_body_max_jump_m_ =
+      declare_parameter<double>("fused_body_max_jump_m", 0.5);
 
   single_body_enabled_ = declare_parameter<bool>("single_body_enabled", true);
   publish_overlay_images_ =
@@ -499,6 +509,31 @@ void ZedBodyFusionNode::loadParameters() {
     throw std::runtime_error(
         "single_body_bridge_timeout_sec must be finite and non-negative");
   }
+  if (!std::isfinite(single_body_bridge_max_speed_mps_) ||
+      single_body_bridge_max_speed_mps_ < 0.0) {
+    throw std::runtime_error(
+        "single_body_bridge_max_speed_mps must be finite and non-negative");
+  }
+  if (single_body_enabled_ && camera_body_fallback_enabled_) {
+    if (camera_body_fallback_minimum_cameras_ <= 0 ||
+        camera_body_fallback_minimum_cameras_ >
+            static_cast<int>(camera_specs_.size())) {
+      throw std::runtime_error(
+          "camera_body_fallback_minimum_cameras must be in the range [1, " +
+          std::to_string(camera_specs_.size()) + "]");
+    }
+    if (!std::isfinite(camera_body_fallback_consensus_distance_m_) ||
+        camera_body_fallback_consensus_distance_m_ <= 0.0) {
+      throw std::runtime_error(
+          "camera_body_fallback_consensus_distance_m must be finite and "
+          "positive");
+    }
+    if (!std::isfinite(fused_body_max_jump_m_) ||
+        fused_body_max_jump_m_ <= 0.0) {
+      throw std::runtime_error(
+          "fused_body_max_jump_m must be finite and positive");
+    }
+  }
   if (fusion_minimum_allowed_cameras_ <= 0 ||
       fusion_minimum_allowed_cameras_ >
           static_cast<int>(camera_specs_.size())) {
@@ -512,7 +547,8 @@ void ZedBodyFusionNode::loadParameters() {
   }
 
   single_body_continuity_ = std::make_unique<SingleBodyContinuity>(
-      single_body_logical_id_, single_body_bridge_timeout_sec_);
+      single_body_logical_id_, single_body_bridge_timeout_sec_,
+      single_body_bridge_max_speed_mps_);
 }
 
 void ZedBodyFusionNode::normalizeMode() {
@@ -1469,10 +1505,12 @@ void ZedBodyFusionNode::processFusion() {
     return;
   }
 
+  per_camera_bodies_retrieved_this_cycle_ = false;
   auto message = toRosMessage(bodies);
   recordFusedMessage(!message.objects.empty());
   pub_bodies_->publish(std::move(message));
-  if (publish_per_camera_skeletons_) {
+  if (publish_per_camera_skeletons_ &&
+      !per_camera_bodies_retrieved_this_cycle_) {
     publishPerCameraBodies();
   }
 }
@@ -1816,6 +1854,23 @@ bool ZedBodyFusionNode::bodyPassesRosFilter(const sl::BodyData &body) const {
   return validKeypointCount(body) >= fusion_minimum_allowed_keypoints_;
 }
 
+bool ZedBodyFusionNode::bodyPassesMeasuredFilter(
+    const sl::BodyData &body, bool tracking_available) const {
+  if (!bodyPassesRosFilter(body)) {
+    return false;
+  }
+
+  // With tracking enabled, OK is the only state suitable for refreshing the
+  // continuity model. SEARCHING/TERMINATE are SDK predictions or stale tracks,
+  // and OFF means tracking has not initialized. When sender tracking is
+  // intentionally disabled, OFF is the normal measured-detection state.
+  if (tracking_available) {
+    return body.tracking_state == sl::OBJECT_TRACKING_STATE::OK;
+  }
+  return body.tracking_state == sl::OBJECT_TRACKING_STATE::OFF ||
+         body.tracking_state == sl::OBJECT_TRACKING_STATE::OK;
+}
+
 int ZedBodyFusionNode::bestConfidenceIndex(
     const std::vector<sl::BodyData> &bodies) const {
   if (bodies.empty()) {
@@ -1826,7 +1881,7 @@ int ZedBodyFusionNode::bestConfidenceIndex(
   float best_confidence = -1.0f;
   for (size_t idx = 0; idx < bodies.size(); ++idx) {
     const auto &body = bodies[idx];
-    if (!bodyPassesRosFilter(body)) {
+    if (!bodyPassesMeasuredFilter(body, fusion_tracking_enabled_)) {
       continue;
     }
     if (body.confidence > best_confidence) {
@@ -1846,7 +1901,8 @@ int ZedBodyFusionNode::bodyIndexById(const std::vector<sl::BodyData> &bodies,
 
   const auto it = std::find_if(
       bodies.begin(), bodies.end(), [this, body_id](const sl::BodyData &body) {
-        return body.id == body_id && bodyPassesRosFilter(body);
+        return body.id == body_id &&
+               bodyPassesMeasuredFilter(body, fusion_tracking_enabled_);
       });
 
   if (it == bodies.end()) {
@@ -1968,17 +2024,88 @@ zed_msgs::msg::ObjectsStamped ZedBodyFusionNode::toRosMessage(
 
   if (apply_single_body_filter) {
     const auto steady_now = SingleBodyContinuity::Clock::now();
+    if (last_single_body_position_at_) {
+      const double baseline_age_sec =
+          std::chrono::duration<double>(steady_now -
+                                        *last_single_body_position_at_)
+              .count();
+      if (!std::isfinite(baseline_age_sec) || baseline_age_sec < 0.0 ||
+          baseline_age_sec > single_body_bridge_timeout_sec_) {
+        single_body_continuity_->reset();
+        last_single_body_position_.reset();
+        last_single_body_position_at_.reset();
+      }
+    }
+
+    std::optional<zed_msgs::msg::Object> observation;
     const int selected_index = selectedBodyIndex(bodies.body_list);
     if (selected_index >= 0) {
-      zed_msgs::msg::Object observed;
-      copyBodyToRosObject(
-          bodies, bodies.body_list[static_cast<size_t>(selected_index)],
-          observed, tracking_available);
-      msg.objects.push_back(
-          single_body_continuity_->observe(observed, steady_now));
+      observation.emplace();
+      copyBodyToRosObject(bodies,
+                          bodies.body_list[static_cast<size_t>(selected_index)],
+                          *observation, tracking_available);
+    }
+
+    if (observation && !hasFiniteBodyPosition(*observation)) {
+      observation.reset();
+    }
+
+    bool fused_observation_is_suspicious = false;
+    if (camera_body_fallback_enabled_ && observation &&
+        last_single_body_position_) {
+      const double dx = static_cast<double>(observation->position[0]) -
+                        (*last_single_body_position_)[0];
+      const double dy = static_cast<double>(observation->position[1]) -
+                        (*last_single_body_position_)[1];
+      const double dz = static_cast<double>(observation->position[2]) -
+                        (*last_single_body_position_)[2];
+      fused_observation_is_suspicious =
+          std::sqrt(dx * dx + dy * dy + dz * dz) > fused_body_max_jump_m_;
+    }
+
+    bool using_camera_fallback = false;
+    if (camera_body_fallback_enabled_ &&
+        (!observation || fused_observation_is_suspicious)) {
+      const auto fallback = retrieveCameraBodyFallback();
+      if (!observation) {
+        observation = fallback;
+        using_camera_fallback = fallback.has_value();
+      } else if (fused_observation_is_suspicious) {
+        if (fallback && bodyPositionDistance(*observation, *fallback) <=
+                            camera_body_fallback_consensus_distance_m_) {
+          // All independent cameras agree with the jump, so it represents a
+          // coherent coordinate/person movement rather than a fusion ghost.
+        } else {
+          observation = fallback;
+          using_camera_fallback = fallback.has_value();
+        }
+      }
+    }
+
+    if (observation) {
+      auto accepted =
+          using_camera_fallback
+              ? single_body_continuity_->observeFallbackPosition(*observation,
+                                                                 steady_now)
+              : single_body_continuity_->observe(*observation, steady_now);
+      if (hasFiniteBodyPosition(accepted)) {
+        last_single_body_position_ = std::array<double, 3>{
+            accepted.position[0], accepted.position[1], accepted.position[2]};
+        last_single_body_position_at_ = steady_now;
+      }
+      msg.objects.push_back(std::move(accepted));
     } else if (const auto bridged =
                    single_body_continuity_->bridge(steady_now)) {
       msg.objects.push_back(*bridged);
+      if (hasFiniteBodyPosition(*bridged)) {
+        last_single_body_position_ = std::array<double, 3>{
+            bridged->position[0], bridged->position[1], bridged->position[2]};
+        last_single_body_position_at_ = steady_now;
+      }
+    } else {
+      single_body_continuity_->reset();
+      last_single_body_position_.reset();
+      last_single_body_position_at_.reset();
     }
     return msg;
   }
@@ -1992,6 +2119,66 @@ zed_msgs::msg::ObjectsStamped ZedBodyFusionNode::toRosMessage(
   }
 
   return msg;
+}
+
+std::optional<zed_msgs::msg::Object>
+ZedBodyFusionNode::retrieveCameraBodyFallback() {
+  per_camera_bodies_retrieved_this_cycle_ = true;
+  std::vector<zed_msgs::msg::Object> candidates;
+  candidates.reserve(workers_.size());
+
+  for (const auto &worker : workers_) {
+    sl::CameraIdentifier uuid;
+    uuid.sn = worker->serial_number;
+
+    sl::Bodies camera_bodies;
+    const auto fusion_err = fusion_.retrieveBodies(
+        camera_bodies, fusion_runtime_params_, uuid, fusion_reference_frame_);
+    if (fusion_err != sl::FUSION_ERROR_CODE::SUCCESS) {
+      RCLCPP_WARN_THROTTLE(
+          get_logger(), *get_clock(), 2000,
+          "Fusion fallback retrieveBodies failed for camera serial %u: %s",
+          worker->serial_number, fusionErrorToString(fusion_err).c_str());
+      continue;
+    }
+    if (!camera_bodies.is_new) {
+      continue;
+    }
+
+    // Per-camera bodies requested from Fusion are already expressed in the
+    // common Fusion reference frame, so no additional TF is required.
+    const sl::BodyData *best_measured = nullptr;
+    for (const auto &body : camera_bodies.body_list) {
+      if (!bodyPassesMeasuredFilter(body, sender_tracking_enabled_)) {
+        continue;
+      }
+      if (best_measured == nullptr ||
+          body.confidence > best_measured->confidence) {
+        best_measured = &body;
+      }
+    }
+    if (best_measured != nullptr) {
+      auto &candidate = candidates.emplace_back();
+      copyBodyToRosObject(camera_bodies, *best_measured, candidate,
+                          sender_tracking_enabled_);
+    }
+
+    if (publish_per_camera_skeletons_ && worker->bodies_pub &&
+        worker->bodies_pub->get_subscription_count() > 0) {
+      auto camera_msg = toRosMessage(camera_bodies, publish_frame_id_, false,
+                                     sender_tracking_enabled_);
+      worker->bodies_pub->publish(std::move(camera_msg));
+    }
+  }
+
+  const auto selected = selectCameraBodyConsensus(
+      candidates,
+      static_cast<std::size_t>(camera_body_fallback_minimum_cameras_),
+      camera_body_fallback_consensus_distance_m_);
+  if (!selected) {
+    return std::nullopt;
+  }
+  return candidates[*selected];
 }
 
 void ZedBodyFusionNode::publishPerCameraBodies() {
