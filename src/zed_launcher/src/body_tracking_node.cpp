@@ -21,13 +21,15 @@ int main(int argc, char **argv) {
       const std::weak_ptr<zed_launcher::ApriltagFusionNode> weak_apriltag_node =
           apriltag_node;
       image_processor =
-          [weak_apriltag_node](const std::string &camera_name,
-                               const sensor_msgs::msg::Image &source,
-                               const sensor_msgs::msg::CameraInfo &camera_info,
-                               sensor_msgs::msg::Image *debug_overlay) {
+          [weak_apriltag_node](
+              const std::string &camera_name,
+              const sensor_msgs::msg::Image &source,
+              const sensor_msgs::msg::CameraInfo &camera_info,
+              const zed_launcher::DepthFrameProvider &depth_provider,
+              sensor_msgs::msg::Image *debug_overlay) {
             if (const auto node = weak_apriltag_node.lock()) {
               node->processCameraFrame(camera_name, source, camera_info,
-                                       debug_overlay);
+                                       depth_provider, debug_overlay);
             }
           };
     }

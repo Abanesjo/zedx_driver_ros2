@@ -1,7 +1,10 @@
 #pragma once
 
+#include "zed_launcher/depth_frame.hpp"
+
 #include <array>
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <mutex>
@@ -44,6 +47,7 @@ public:
   void processCameraFrame(const std::string &camera_name,
                           const sensor_msgs::msg::Image &source,
                           const sensor_msgs::msg::CameraInfo &camera_info,
+                          const DepthFrameProvider &depth_provider,
                           sensor_msgs::msg::Image *debug_overlay);
 
 private:
@@ -92,6 +96,25 @@ private:
     cv::Mat rvec;
     cv::Mat tvec;
     double reprojection_rmse_px = 0.0;
+    bool used_depth = false;
+    std::size_t depth_valid_samples = 0;
+    std::size_t depth_inlier_samples = 0;
+    double depth_valid_fraction = 0.0;
+    double depth_plane_rmse_m = 0.0;
+    double depth_size_error_fraction = 0.0;
+    double depth_pnp_translation_delta_m = 0.0;
+    double depth_pnp_rotation_delta_deg = 0.0;
+    double depth_blend_weight = 0.0;
+    double estimator_weight = 1.0;
+  };
+
+  struct DepthPlane {
+    cv::Vec3d normal;
+    double offset = 0.0;
+    std::size_t valid_samples = 0;
+    std::size_t inlier_samples = 0;
+    double valid_fraction = 0.0;
+    double rmse_m = 0.0;
   };
 
   struct CameraContext {
@@ -120,6 +143,7 @@ private:
 
   std::optional<sensor_msgs::msg::Image>
   processImage(size_t camera_index, const sensor_msgs::msg::Image &source,
+               const DepthFrameProvider &depth_provider,
                const sensor_msgs::msg::Image *debug_base, bool render_debug);
 
   bool shouldSkipFrame(CameraContext &camera, const rclcpp::Time &current_time);
@@ -141,15 +165,24 @@ private:
 
   tf2::Transform
   tagFrameFromBothTags(const tf2::Transform &fusion_from_front_tag,
-                       const tf2::Transform &fusion_from_back_tag) const;
+                       const tf2::Transform &fusion_from_back_tag,
+                       double front_quality = 1.0,
+                       double back_quality = 1.0) const;
+
+  void updateTagTransform(const FusedTagEstimate &front,
+                          const FusedTagEstimate &back);
 
   void updateTagSeparation(const FusedTagEstimate &front,
                            const FusedTagEstimate &back);
 
+  tf2::Transform activeFrontFromBackTag() const;
+
+  std::optional<tf2::Transform>
+  robustAverageTagTransforms(const std::vector<tf2::Transform> &samples) const;
+
   std::optional<size_t> selectFallbackTagSlot() const;
 
   tf2::Transform smoothTransform(const tf2::Transform &fusion_from_tag_frame,
-                                 const rclcpp::Time &source_stamp,
                                  const rclcpp::Time &receipt_time);
 
   void publishResult(const tf2::Transform &fusion_from_tag_frame,
@@ -178,7 +211,26 @@ private:
 
   std::optional<PoseEstimate> estimateTagInCameraFrame(
       const std::vector<cv::Point2f> &corners, const cv::Mat &camera_matrix,
-      const cv::Mat &distortion_coeffs, double tag_size_m) const;
+      const cv::Mat &distortion_coeffs, double tag_size_m,
+      const DepthFrameView *depth_frame, std::size_t image_width,
+      std::size_t image_height) const;
+
+  std::optional<PoseEstimate>
+  estimateTagWithPnp(const std::vector<cv::Point2f> &corners,
+                     const cv::Mat &camera_matrix,
+                     const cv::Mat &distortion_coeffs, double tag_size_m) const;
+
+  std::optional<PoseEstimate> estimateTagWithDepth(
+      const std::vector<cv::Point2f> &corners, const cv::Mat &camera_matrix,
+      const cv::Mat &distortion_coeffs, double tag_size_m,
+      const DepthFrameView &depth_frame, std::size_t image_width,
+      std::size_t image_height, const PoseEstimate &pnp_estimate) const;
+
+  std::optional<DepthPlane>
+  fitDepthPlane(const std::vector<cv::Point2f> &corners,
+                const cv::Mat &camera_matrix, const DepthFrameView &depth_frame,
+                std::size_t image_width, std::size_t image_height,
+                const PoseEstimate *pnp_estimate) const;
 
   std::vector<cv::Point3f> markerObjectPoints(double tag_size_m) const;
 
@@ -215,6 +267,24 @@ private:
   double tag_separation_ema_alpha_ = 0.05;
   double tag_separation_max_innovation_m_ = 0.02;
   double learned_tag_separation_m_ = 0.06;
+  bool use_depth_ = true;
+  double depth_inner_margin_ratio_ = 0.20;
+  int depth_min_valid_samples_ = 25;
+  double depth_min_valid_fraction_ = 0.25;
+  double depth_plane_inlier_threshold_m_ = 0.015;
+  double depth_plane_max_rmse_m_ = 0.010;
+  double depth_max_pnp_translation_delta_m_ = 0.20;
+  double depth_max_pnp_rotation_delta_deg_ = 20.0;
+  double depth_max_size_error_fraction_ = 0.25;
+  bool learn_tag_transform_ = true;
+  double tag_transform_bootstrap_duration_sec_ = 2.5;
+  int tag_transform_bootstrap_min_samples_ = 30;
+  double tag_transform_pair_max_age_sec_ = 0.10;
+  double tag_transform_bootstrap_translation_outlier_m_ = 0.03;
+  double tag_transform_bootstrap_rotation_outlier_deg_ = 8.0;
+  double tag_transform_online_alpha_ = 0.01;
+  double tag_transform_max_translation_step_m_ = 0.002;
+  double tag_transform_max_rotation_step_deg_ = 0.25;
   double max_detection_rate_hz_ = 30.0;
   double fusion_publish_rate_hz_ = 30.0;
   double tf_lookup_timeout_sec_ = 0.05;
@@ -248,8 +318,14 @@ private:
   std::array<std::optional<FusedTagEstimate>, kTagCount> last_tag_estimates_;
   std::vector<uint64_t> last_published_sequences_;
   std::vector<uint64_t> last_separation_update_sequences_;
+  std::vector<uint64_t> last_tag_transform_update_sequences_;
+  tf2::Transform ideal_front_from_back_tag_;
+  tf2::Transform learned_front_from_back_tag_;
+  std::vector<tf2::Transform> tag_transform_bootstrap_samples_;
+  rclcpp::Time tag_transform_bootstrap_start_time_;
+  bool has_tag_transform_bootstrap_start_time_ = false;
+  bool tag_transform_calibrated_ = false;
   tf2::Transform smoothed_fusion_from_tag_frame_;
-  rclcpp::Time last_smoothed_stamp_;
   rclcpp::Time last_smoothed_receipt_time_;
   bool has_smoothed_transform_ = false;
 };

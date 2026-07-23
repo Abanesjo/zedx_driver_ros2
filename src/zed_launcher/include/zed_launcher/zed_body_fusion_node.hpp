@@ -1,5 +1,7 @@
 #pragma once
 
+#include "zed_launcher/depth_frame.hpp"
+
 #include <sl/Camera.hpp>
 #include <sl/Fusion.hpp>
 
@@ -27,7 +29,8 @@ class ZedBodyFusionNode final : public rclcpp::Node {
 public:
   using ImageProcessor = std::function<void(
       const std::string &, const sensor_msgs::msg::Image &,
-      const sensor_msgs::msg::CameraInfo &, sensor_msgs::msg::Image *)>;
+      const sensor_msgs::msg::CameraInfo &, const DepthFrameProvider &,
+      sensor_msgs::msg::Image *)>;
 
   explicit ZedBodyFusionNode(
       const rclcpp::NodeOptions &options = rclcpp::NodeOptions(),
@@ -47,6 +50,7 @@ private:
     sl::FusionConfiguration config;
     sl::Camera camera;
     sl::Mat image;
+    sl::Mat depth;
     sensor_msgs::msg::CameraInfo camera_info;
     rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr overlay_image_pub;
     rclcpp::Publisher<zed_msgs::msg::ObjectsStamped>::SharedPtr bodies_pub;

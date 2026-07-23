@@ -54,6 +54,57 @@
     name="apriltag_tag_separation_max_innovation_m"
     default="0.02"
   />
+  <arg name="apriltag_use_depth" default="true" />
+  <arg name="apriltag_depth_inner_margin_ratio" default="0.20" />
+  <arg name="apriltag_depth_min_valid_samples" default="25" />
+  <arg name="apriltag_depth_min_valid_fraction" default="0.25" />
+  <arg
+    name="apriltag_depth_plane_inlier_threshold_m"
+    default="0.015"
+  />
+  <arg name="apriltag_depth_plane_max_rmse_m" default="0.010" />
+  <arg
+    name="apriltag_depth_max_pnp_translation_delta_m"
+    default="0.20"
+  />
+  <arg
+    name="apriltag_depth_max_pnp_rotation_delta_deg"
+    default="20.0"
+  />
+  <arg
+    name="apriltag_depth_max_size_error_fraction"
+    default="0.25"
+  />
+  <arg name="apriltag_learn_tag_transform" default="true" />
+  <arg
+    name="apriltag_tag_transform_bootstrap_duration_sec"
+    default="2.5"
+  />
+  <arg
+    name="apriltag_tag_transform_bootstrap_min_samples"
+    default="30"
+  />
+  <arg
+    name="apriltag_tag_transform_pair_max_age_sec"
+    default="0.10"
+  />
+  <arg
+    name="apriltag_tag_transform_bootstrap_translation_outlier_m"
+    default="0.03"
+  />
+  <arg
+    name="apriltag_tag_transform_bootstrap_rotation_outlier_deg"
+    default="8.0"
+  />
+  <arg name="apriltag_tag_transform_online_alpha" default="0.01" />
+  <arg
+    name="apriltag_tag_transform_max_translation_step_m"
+    default="0.002"
+  />
+  <arg
+    name="apriltag_tag_transform_max_rotation_step_deg"
+    default="0.25"
+  />
   <arg name="apriltag_debug_axis_length_m" default="0.06" />
   <arg name="apriltag_publish_fusion_pose" default="true" />
   <arg name="apriltag_publish_tf" default="true" />
@@ -71,7 +122,7 @@
   <arg name="apriltag_corner_refinement" default="true" />
   <arg name="apriltag_camera_frame_convention" default="zed_x_forward" />
   <!-- Options: PERFORMANCE, QUALITY, ULTRA, NEURAL_LIGHT, NEURAL, NEURAL_PLUS -->
-  <arg name="depth_mode" default="NEURAL_LIGHT" />
+  <arg name="depth_mode" default="NEURAL_PLUS" />
   <arg name="fusion_reference_frame" default="WORLD" />
   <arg name="fusion_skeleton_smoothing" default="1.0" />
   <arg name="fusion_minimum_allowed_cameras" default="2" />
@@ -163,6 +214,75 @@
     <param
       name="tag_separation_max_innovation_m"
       value="$(var apriltag_tag_separation_max_innovation_m)"
+    />
+    <param name="use_depth" value="$(var apriltag_use_depth)" />
+    <param
+      name="depth_inner_margin_ratio"
+      value="$(var apriltag_depth_inner_margin_ratio)"
+    />
+    <param
+      name="depth_min_valid_samples"
+      value="$(var apriltag_depth_min_valid_samples)"
+    />
+    <param
+      name="depth_min_valid_fraction"
+      value="$(var apriltag_depth_min_valid_fraction)"
+    />
+    <param
+      name="depth_plane_inlier_threshold_m"
+      value="$(var apriltag_depth_plane_inlier_threshold_m)"
+    />
+    <param
+      name="depth_plane_max_rmse_m"
+      value="$(var apriltag_depth_plane_max_rmse_m)"
+    />
+    <param
+      name="depth_max_pnp_translation_delta_m"
+      value="$(var apriltag_depth_max_pnp_translation_delta_m)"
+    />
+    <param
+      name="depth_max_pnp_rotation_delta_deg"
+      value="$(var apriltag_depth_max_pnp_rotation_delta_deg)"
+    />
+    <param
+      name="depth_max_size_error_fraction"
+      value="$(var apriltag_depth_max_size_error_fraction)"
+    />
+    <param
+      name="learn_tag_transform"
+      value="$(var apriltag_learn_tag_transform)"
+    />
+    <param
+      name="tag_transform_bootstrap_duration_sec"
+      value="$(var apriltag_tag_transform_bootstrap_duration_sec)"
+    />
+    <param
+      name="tag_transform_bootstrap_min_samples"
+      value="$(var apriltag_tag_transform_bootstrap_min_samples)"
+    />
+    <param
+      name="tag_transform_pair_max_age_sec"
+      value="$(var apriltag_tag_transform_pair_max_age_sec)"
+    />
+    <param
+      name="tag_transform_bootstrap_translation_outlier_m"
+      value="$(var apriltag_tag_transform_bootstrap_translation_outlier_m)"
+    />
+    <param
+      name="tag_transform_bootstrap_rotation_outlier_deg"
+      value="$(var apriltag_tag_transform_bootstrap_rotation_outlier_deg)"
+    />
+    <param
+      name="tag_transform_online_alpha"
+      value="$(var apriltag_tag_transform_online_alpha)"
+    />
+    <param
+      name="tag_transform_max_translation_step_m"
+      value="$(var apriltag_tag_transform_max_translation_step_m)"
+    />
+    <param
+      name="tag_transform_max_rotation_step_deg"
+      value="$(var apriltag_tag_transform_max_rotation_step_deg)"
     />
     <param
       name="publish_fusion_pose"

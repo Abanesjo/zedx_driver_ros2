@@ -688,8 +688,75 @@ void ZedBodyFusionNode::publishImage(CameraWorker &worker,
 
   auto camera_info_msg = worker.camera_info;
   camera_info_msg.header.stamp = image_msg.header.stamp;
+  if (camera_info_msg.width > 0 && camera_info_msg.height > 0 &&
+      (camera_info_msg.width != image_msg.width ||
+       camera_info_msg.height != image_msg.height)) {
+    const double scale_x = static_cast<double>(image_msg.width) /
+                           static_cast<double>(camera_info_msg.width);
+    const double scale_y = static_cast<double>(image_msg.height) /
+                           static_cast<double>(camera_info_msg.height);
+    for (const auto index : {0U, 1U, 2U}) {
+      camera_info_msg.k[index] *= scale_x;
+    }
+    for (const auto index : {3U, 4U, 5U}) {
+      camera_info_msg.k[index] *= scale_y;
+    }
+    for (const auto index : {0U, 1U, 2U, 3U}) {
+      camera_info_msg.p[index] *= scale_x;
+    }
+    for (const auto index : {4U, 5U, 6U, 7U}) {
+      camera_info_msg.p[index] *= scale_y;
+    }
+  }
   camera_info_msg.width = image_msg.width;
   camera_info_msg.height = image_msg.height;
+
+  bool depth_attempted = false;
+  std::optional<DepthFrameView> depth_view;
+  const DepthFrameProvider depth_provider =
+      [this, &worker, &steady_clock, &image_msg, &depth_attempted,
+       &depth_view]() -> std::optional<DepthFrameView> {
+    if (depth_attempted) {
+      return depth_view;
+    }
+    depth_attempted = true;
+
+    const auto depth_err = worker.camera.retrieveMeasure(
+        worker.depth, sl::MEASURE::DEPTH, sl::MEM::CPU,
+        sl::Resolution(static_cast<int>(image_msg.width),
+                       static_cast<int>(image_msg.height)));
+    if (depth_err != sl::ERROR_CODE::SUCCESS) {
+      RCLCPP_WARN_THROTTLE(get_logger(), steady_clock, 2000,
+                           "Camera serial %u depth retrieval failed: %s",
+                           worker.serial_number,
+                           zedErrorToString(depth_err).c_str());
+      return std::nullopt;
+    }
+    if (worker.depth.getDataType() != sl::MAT_TYPE::F32_C1) {
+      RCLCPP_WARN_THROTTLE(
+          get_logger(), steady_clock, 2000,
+          "Camera serial %u returned a non-F32_C1 depth buffer",
+          worker.serial_number);
+      return std::nullopt;
+    }
+
+    const auto *depth_data = reinterpret_cast<const float *>(
+        worker.depth.getPtr<sl::float1>(sl::MEM::CPU));
+    const std::size_t depth_width = worker.depth.getWidth();
+    const std::size_t depth_height = worker.depth.getHeight();
+    const std::size_t depth_stride = worker.depth.getStepBytes(sl::MEM::CPU);
+    const DepthFrameView candidate{depth_data, depth_width, depth_height,
+                                   depth_stride};
+    if (!candidate) {
+      RCLCPP_WARN_THROTTLE(get_logger(), steady_clock, 2000,
+                           "Camera serial %u returned an invalid depth buffer",
+                           worker.serial_number);
+      return std::nullopt;
+    }
+
+    depth_view = candidate;
+    return depth_view;
+  };
 
   const bool render_debug = hasOverlayImageSubscribers(worker);
   sensor_msgs::msg::Image debug_overlay;
@@ -715,7 +782,7 @@ void ZedBodyFusionNode::publishImage(CameraWorker &worker,
   if (image_processor_) {
     try {
       image_processor_(worker.camera_name, image_msg, camera_info_msg,
-                       debug_overlay_ptr);
+                       depth_provider, debug_overlay_ptr);
     } catch (const std::exception &error) {
       RCLCPP_WARN_THROTTLE(
           get_logger(), steady_clock, 2000,
