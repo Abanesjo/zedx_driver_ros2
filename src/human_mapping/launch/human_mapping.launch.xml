@@ -4,7 +4,7 @@
   <arg name="joint_command_topic" default="/human/joint_commands"/>
   <arg name="body_collider_topic" default="/human/body_colliders"/>
   <arg name="collider_topic" default="/human/colliders"/>
-  <arg name="enable_hand_mapping" default="true"/>
+  <arg name="enable_hand_mapping" default="false"/>
   <arg name="hand_finger_angles_topic" default="/hand_finger_angles"/>
   <arg name="hand_collider_topic" default="/human/hand_colliders"/>
   <arg name="publish_collider_markers" default="true"/>
