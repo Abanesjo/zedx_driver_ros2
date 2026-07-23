@@ -581,18 +581,37 @@ void ApriltagFusionNode::handleImage(
     size_t camera_index, const sensor_msgs::msg::Image::ConstSharedPtr msg) {
   const DepthFrameProvider no_depth;
   auto debug_image = processImage(camera_index, *msg, no_depth, nullptr,
-                                  publish_debug_images_);
+                                  publish_debug_images_, true);
   auto &camera = *cameras_.at(camera_index);
   if (debug_image && camera.debug_pub) {
     camera.debug_pub->publish(std::move(*debug_image));
   }
 }
 
+bool ApriltagFusionNode::shouldProcessCameraFrame(
+    const std::string &camera_name) {
+  if (!enabled_ || image_input_mode_ != ImageInputMode::Direct) {
+    return false;
+  }
+
+  const auto camera_name_it =
+      std::find(camera_names_.begin(), camera_names_.end(), camera_name);
+  if (camera_name_it == camera_names_.end()) {
+    RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
+                         "Ignoring AprilTag frame for unknown camera '%s'",
+                         camera_name.c_str());
+    return false;
+  }
+  const auto camera_index =
+      static_cast<size_t>(std::distance(camera_names_.begin(), camera_name_it));
+  return !shouldSkipFrame(*cameras_.at(camera_index));
+}
+
 void ApriltagFusionNode::processCameraFrame(
     const std::string &camera_name, const sensor_msgs::msg::Image &source,
     const sensor_msgs::msg::CameraInfo &camera_info,
     const DepthFrameProvider &depth_provider,
-    sensor_msgs::msg::Image *debug_overlay) {
+    sensor_msgs::msg::Image *debug_overlay, bool frame_was_admitted) {
   if (!enabled_) {
     return;
   }
@@ -621,24 +640,27 @@ void ApriltagFusionNode::processCameraFrame(
         std::make_shared<sensor_msgs::msg::CameraInfo>(camera_info);
   }
 
-  auto rendered = processImage(camera_index, source, depth_provider,
-                               debug_overlay, debug_overlay != nullptr);
+  auto rendered =
+      processImage(camera_index, source, depth_provider, debug_overlay,
+                   debug_overlay != nullptr, !frame_was_admitted);
   if (debug_overlay && rendered) {
     *debug_overlay = std::move(*rendered);
   }
 }
 
-std::optional<sensor_msgs::msg::Image> ApriltagFusionNode::processImage(
-    size_t camera_index, const sensor_msgs::msg::Image &source,
-    const DepthFrameProvider &depth_provider,
-    const sensor_msgs::msg::Image *debug_base, bool render_debug) {
+std::optional<sensor_msgs::msg::Image>
+ApriltagFusionNode::processImage(size_t camera_index,
+                                 const sensor_msgs::msg::Image &source,
+                                 const DepthFrameProvider &depth_provider,
+                                 const sensor_msgs::msg::Image *debug_base,
+                                 bool render_debug, bool apply_rate_limit) {
   if (!enabled_) {
     return std::nullopt;
   }
 
   auto &camera = *cameras_.at(camera_index);
   const auto current_time = now();
-  if (shouldSkipFrame(camera, current_time)) {
+  if (apply_rate_limit && shouldSkipFrame(camera)) {
     return std::nullopt;
   }
 
@@ -945,17 +967,19 @@ std::optional<sensor_msgs::msg::Image> ApriltagFusionNode::processImage(
   return debug_result;
 }
 
-bool ApriltagFusionNode::shouldSkipFrame(CameraContext &camera,
-                                         const rclcpp::Time &current_time) {
+bool ApriltagFusionNode::shouldSkipFrame(CameraContext &camera) {
   if (max_detection_rate_hz_ == 0.0) {
     return false;
   }
 
+  const auto current_time = std::chrono::steady_clock::now();
   std::lock_guard<std::mutex> lock(camera.mutex);
   if (camera.has_last_detection_attempt_time) {
     const double elapsed =
-        (current_time - camera.last_detection_attempt_time).seconds();
-    if (elapsed >= 0.0 && elapsed < 1.0 / max_detection_rate_hz_) {
+        std::chrono::duration<double>(current_time -
+                                      camera.last_detection_attempt_time)
+            .count();
+    if (elapsed < 1.0 / max_detection_rate_hz_) {
       return true;
     }
   }
@@ -1915,7 +1939,7 @@ bool ApriltagFusionNode::toGrayImage(const sensor_msgs::msg::Image &msg,
     const cv::Mat view(static_cast<int>(msg.height),
                        static_cast<int>(msg.width), CV_8UC1,
                        const_cast<uint8_t *>(msg.data.data()), msg.step);
-    gray = view.clone();
+    gray = view;
     return true;
   }
   if (msg.encoding == sensor_msgs::image_encodings::BGR8 ||

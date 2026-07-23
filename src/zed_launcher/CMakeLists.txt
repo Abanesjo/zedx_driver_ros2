@@ -21,6 +21,7 @@ find_package(OpenCV REQUIRED COMPONENTS
 message(STATUS
   "zed_launcher: OpenCV ${OpenCV_VERSION}, using ${ZED_LAUNCHER_ARUCO_API}"
 )
+find_package(diagnostic_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(sensor_msgs REQUIRED)
@@ -67,6 +68,7 @@ target_link_libraries(zed_body_fusion_node
 )
 
 ament_target_dependencies(zed_body_fusion_node
+  diagnostic_msgs
   geometry_msgs
   rclcpp
   sensor_msgs
@@ -140,6 +142,7 @@ add_executable(body_tracking_node
   src/body_tracking_node.cpp
   src/zed_body_fusion.cpp
   src/apriltag_fusion.cpp
+  src/async_apriltag_processor.cpp
 )
 
 target_compile_features(body_tracking_node PRIVATE cxx_std_17)
@@ -159,6 +162,7 @@ target_link_libraries(body_tracking_node
 )
 
 ament_target_dependencies(body_tracking_node
+  diagnostic_msgs
   geometry_msgs
   rclcpp
   sensor_msgs
@@ -197,6 +201,31 @@ if(BUILD_TESTING)
     ${ZED_LAUNCHER_ARUCO_TARGET}
   )
   ament_target_dependencies(apriltag_fusion_test
+    geometry_msgs
+    rclcpp
+    sensor_msgs
+    tf2
+    tf2_ros
+  )
+
+  ament_add_gtest(
+    async_apriltag_processor_test
+    test/test_async_apriltag_processor.cpp
+    src/async_apriltag_processor.cpp
+    src/apriltag_fusion.cpp
+  )
+  target_compile_features(async_apriltag_processor_test PRIVATE cxx_std_17)
+  target_include_directories(async_apriltag_processor_test PRIVATE
+    include
+    ${OpenCV_INCLUDE_DIRS}
+  )
+  target_link_libraries(async_apriltag_processor_test
+    opencv_core
+    opencv_imgproc
+    opencv_calib3d
+    ${ZED_LAUNCHER_ARUCO_TARGET}
+  )
+  ament_target_dependencies(async_apriltag_processor_test
     geometry_msgs
     rclcpp
     sensor_msgs

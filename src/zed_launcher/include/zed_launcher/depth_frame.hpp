@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <functional>
 #include <optional>
+#include <vector>
 
 namespace zed_launcher {
 
@@ -27,5 +28,20 @@ struct DepthFrameView {
 /// A provider returns std::nullopt when depth is unavailable. Consumers must
 /// not retain or invoke it after their synchronous image callback returns.
 using DepthFrameProvider = std::function<std::optional<DepthFrameView>()>;
+
+/// Owning, tightly packed CPU depth frame used by asynchronous consumers.
+struct OwnedDepthFrame {
+  std::vector<float> data;
+  std::size_t width = 0;
+  std::size_t height = 0;
+
+  [[nodiscard]] DepthFrameView view() const noexcept {
+    return DepthFrameView{data.data(), width, height, width * sizeof(float)};
+  }
+
+  [[nodiscard]] explicit operator bool() const noexcept {
+    return width > 0 && height > 0 && data.size() == width * height;
+  }
+};
 
 } // namespace zed_launcher

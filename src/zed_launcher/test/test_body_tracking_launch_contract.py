@@ -5,6 +5,7 @@ import xml.etree.ElementTree as ET
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 LAUNCH_PATH = PACKAGE_ROOT / "launch" / "body_tracking.launch.xml"
+SERVER_LAUNCH_PATH = PACKAGE_ROOT / "launch" / "server.launch.xml"
 RVIZ_PATH = PACKAGE_ROOT / "rviz" / "body_fusion.rviz"
 
 
@@ -35,7 +36,7 @@ def test_body_tracking_launch_uses_combined_in_process_pipeline():
     assert overlay_parameters[0].attrib.get("value") == "$(var debug)"
 
 
-def test_depth_assisted_apriltag_defaults_and_parameter_plumbing():
+def test_continuity_and_apriltag_defaults_and_parameter_plumbing():
     launch = ET.parse(LAUNCH_PATH).getroot()
     arguments = {
         arg.attrib["name"]: arg.attrib.get("default")
@@ -52,9 +53,17 @@ def test_depth_assisted_apriltag_defaults_and_parameter_plumbing():
     }
 
     expected_defaults = {
-        "camera_resolution": "HD1080",
-        "camera_fps": "30",
-        "depth_mode": "NEURAL_PLUS",
+        "camera_resolution": "SVGA",
+        "camera_fps": "60",
+        "fusion_publish_rate_hz": "60.0",
+        "fusion_diagnostics_rate_hz": "1.0",
+        "body_model": "HUMAN_BODY_FAST",
+        "single_body_switch_frames": "60",
+        "body_prediction_timeout_sec": "0.4",
+        "depth_mode": "NEURAL_LIGHT",
+        "fusion_skeleton_smoothing": "1.0",
+        "fusion_minimum_allowed_cameras": "1",
+        "apriltag_max_detection_rate_hz": "20.0",
         "apriltag_use_depth": "true",
         "apriltag_depth_inner_margin_ratio": "0.20",
         "apriltag_depth_min_valid_samples": "25",
@@ -86,6 +95,18 @@ def test_depth_assisted_apriltag_defaults_and_parameter_plumbing():
         "apriltag_kalman_reset_sec": "0.5",
     }
     expected_parameter_sources = {
+        "camera_resolution": "camera_resolution",
+        "camera_fps": "camera_fps",
+        "body_model": "body_model",
+        "single_body_switch_frames": "single_body_switch_frames",
+        "fusion_publish_rate_hz": "fusion_publish_rate_hz",
+        "fusion_diagnostics_rate_hz": "fusion_diagnostics_rate_hz",
+        "body_prediction_timeout_sec": "body_prediction_timeout_sec",
+        "depth_mode": "depth_mode",
+        "fusion_skeleton_smoothing": "fusion_skeleton_smoothing",
+        "fusion_minimum_allowed_cameras":
+            "fusion_minimum_allowed_cameras",
+        "max_detection_rate_hz": "apriltag_max_detection_rate_hz",
         "use_depth": "apriltag_use_depth",
         "depth_inner_margin_ratio": "apriltag_depth_inner_margin_ratio",
         "depth_min_valid_samples": "apriltag_depth_min_valid_samples",
@@ -147,6 +168,35 @@ def test_depth_assisted_apriltag_defaults_and_parameter_plumbing():
     assert "apriltag_learn_tag_separation" in arguments
     assert "apriltag_tag_separation_ema_alpha" in arguments
     assert "apriltag_tag_separation_max_innovation_m" in arguments
+
+
+def test_server_stream_defaults_match_continuity_profile():
+    launch = ET.parse(SERVER_LAUNCH_PATH).getroot()
+    arguments = {
+        arg.attrib["name"]: arg.attrib.get("default")
+        for arg in launch.findall("arg")
+    }
+
+    assert arguments["camera_resolution"] == "SVGA"
+    assert arguments["grab_frame_rate"] == "60"
+    assert arguments["stream_target_framerate"] == "60"
+
+    camera_includes = launch.findall("include")
+    assert len(camera_includes) == 3
+    for include in camera_includes:
+        overrides = next(
+            arg.attrib["value"]
+            for arg in include.findall("arg")
+            if arg.attrib.get("name") == "param_overrides"
+        )
+        assert (
+            "stream_server.target_framerate:="
+            "$(var stream_target_framerate)"
+        ) in overrides
+        assert (
+            "general.grab_resolution:=$(var camera_resolution)"
+        ) in overrides
+        assert "general.grab_frame_rate:=$(var grab_frame_rate)" in overrides
 
 
 def test_rviz_exposes_only_three_combined_camera_overlays():

@@ -8,6 +8,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <iomanip>
 #include <iterator>
 #include <limits>
 #include <memory>
@@ -19,6 +20,8 @@
 #include <utility>
 #include <vector>
 
+#include <diagnostic_msgs/msg/diagnostic_status.hpp>
+#include <diagnostic_msgs/msg/key_value.hpp>
 #include <opencv2/imgproc.hpp>
 #include <sensor_msgs/distortion_models.hpp>
 #include <sensor_msgs/image_encodings.hpp>
@@ -140,6 +143,45 @@ std::string fusionErrorToString(sl::FUSION_ERROR_CODE code) {
   return out.str();
 }
 
+std::string senderErrorToString(sl::SENDER_ERROR_CODE code) {
+  std::ostringstream out;
+  out << sl::toString(code);
+  return out.str();
+}
+
+template <typename Value>
+void addDiagnosticValue(diagnostic_msgs::msg::DiagnosticStatus &status,
+                        const std::string &key, const Value &value) {
+  diagnostic_msgs::msg::KeyValue item;
+  item.key = key;
+  std::ostringstream out;
+  out << value;
+  item.value = out.str();
+  status.values.push_back(std::move(item));
+}
+
+void addDiagnosticFloat(diagnostic_msgs::msg::DiagnosticStatus &status,
+                        const std::string &key, double value) {
+  diagnostic_msgs::msg::KeyValue item;
+  item.key = key;
+  std::ostringstream out;
+  out << std::fixed << std::setprecision(6) << value;
+  item.value = out.str();
+  status.values.push_back(std::move(item));
+}
+
+void raiseDiagnostic(diagnostic_msgs::msg::DiagnosticStatus &status,
+                     uint8_t level, const std::string &message) {
+  if (level > status.level) {
+    status.level = level;
+    status.message = message;
+  } else if (level == status.level &&
+             level != diagnostic_msgs::msg::DiagnosticStatus::OK &&
+             status.message.find(message) == std::string::npos) {
+    status.message += "; " + message;
+  }
+}
+
 double downwardTiltDegrees(const sl::Transform &pose) {
   const auto orientation = pose.getOrientation();
   const double quaternion_norm =
@@ -235,6 +277,10 @@ ZedBodyFusionNode::ZedBodyFusionNode(const rclcpp::NodeOptions &options,
 
   pub_bodies_ = create_publisher<zed_msgs::msg::ObjectsStamped>(
       output_topic_, rclcpp::SensorDataQoS());
+  if (fusion_diagnostics_rate_hz_ > 0.0) {
+    diagnostics_pub_ = create_publisher<diagnostic_msgs::msg::DiagnosticArray>(
+        "/zed_fusion/diagnostics", rclcpp::QoS(10));
+  }
   static_tf_broadcaster_ =
       std::make_unique<tf2_ros::StaticTransformBroadcaster>(this);
 
@@ -259,6 +305,17 @@ ZedBodyFusionNode::ZedBodyFusionNode(const rclcpp::NodeOptions &options,
   fusion_timer_ = create_wall_timer(
       std::chrono::duration_cast<std::chrono::nanoseconds>(timer_period),
       [this]() { processFusion(); });
+
+  if (fusion_diagnostics_rate_hz_ > 0.0) {
+    diagnostics_started_at_ = std::chrono::steady_clock::now();
+    diagnostics_last_sample_at_ = diagnostics_started_at_;
+    const auto diagnostics_period =
+        std::chrono::duration<double>(1.0 / fusion_diagnostics_rate_hz_);
+    diagnostics_timer_ =
+        create_wall_timer(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                              diagnostics_period),
+                          [this]() { publishDiagnostics(); });
+  }
 }
 
 ZedBodyFusionNode::~ZedBodyFusionNode() { shutdown(); }
@@ -330,13 +387,13 @@ void ZedBodyFusionNode::loadParameters() {
   }
 
   body_model_ = parseBodyModel(
-      declare_parameter<std::string>("body_model", "HUMAN_BODY_ACCURATE"));
+      declare_parameter<std::string>("body_model", "HUMAN_BODY_FAST"));
   body_format_ =
       parseBodyFormat(declare_parameter<std::string>("body_format", "BODY_38"));
   depth_mode_ = parseDepthMode(
       declare_parameter<std::string>("depth_mode", "NEURAL_LIGHT"));
   camera_resolution_ = parseResolution(
-      declare_parameter<std::string>("camera_resolution", "HD1080"));
+      declare_parameter<std::string>("camera_resolution", "SVGA"));
   fusion_reference_frame_ = parseFusionReferenceFrame(
       declare_parameter<std::string>("fusion_reference_frame", "BASELINK"));
 
@@ -345,17 +402,21 @@ void ZedBodyFusionNode::loadParameters() {
   single_body_switch_margin_ =
       declare_parameter<double>("single_body_switch_margin", 10.0);
   fusion_skeleton_smoothing_ =
-      declare_parameter<double>("fusion_skeleton_smoothing", 0.0);
+      declare_parameter<double>("fusion_skeleton_smoothing", 1.0);
   fusion_minimum_allowed_cameras_ =
-      declare_parameter<int>("fusion_minimum_allowed_cameras", 2);
+      declare_parameter<int>("fusion_minimum_allowed_cameras", 1);
   fusion_minimum_allowed_keypoints_ =
       declare_parameter<int>("fusion_minimum_allowed_keypoints", 7);
   camera_fps_ = declare_parameter<int>("camera_fps", 60);
   sdk_gpu_id_ = declare_parameter<int>("sdk_gpu_id", -1);
   fusion_publish_rate_hz_ =
       declare_parameter<double>("fusion_publish_rate_hz", 60.0);
+  fusion_diagnostics_rate_hz_ =
+      declare_parameter<double>("fusion_diagnostics_rate_hz", 1.0);
+  body_prediction_timeout_sec_ =
+      declare_parameter<double>("body_prediction_timeout_sec", 0.4);
   single_body_switch_frames_ =
-      declare_parameter<int>("single_body_switch_frames", 5);
+      declare_parameter<int>("single_body_switch_frames", 60);
 
   single_body_enabled_ = declare_parameter<bool>("single_body_enabled", true);
   publish_overlay_images_ =
@@ -367,7 +428,7 @@ void ZedBodyFusionNode::loadParameters() {
   overlay_max_skeleton_age_sec_ =
       declare_parameter<double>("overlay_max_skeleton_age_sec", 0.5);
   sender_tracking_enabled_ =
-      declare_parameter<bool>("sender_tracking_enabled", false);
+      declare_parameter<bool>("sender_tracking_enabled", true);
   fusion_tracking_enabled_ =
       declare_parameter<bool>("fusion_tracking_enabled", true);
   body_fitting_enabled_ =
@@ -380,8 +441,26 @@ void ZedBodyFusionNode::loadParameters() {
   if (fusion_config_path_.empty()) {
     throw std::runtime_error("fusion_config_path is required");
   }
-  if (fusion_publish_rate_hz_ <= 0.0) {
-    throw std::runtime_error("fusion_publish_rate_hz must be positive");
+  if (!std::isfinite(fusion_publish_rate_hz_) ||
+      fusion_publish_rate_hz_ <= 0.0) {
+    throw std::runtime_error(
+        "fusion_publish_rate_hz must be finite and positive");
+  }
+  if (!std::isfinite(fusion_diagnostics_rate_hz_) ||
+      fusion_diagnostics_rate_hz_ < 0.0) {
+    throw std::runtime_error(
+        "fusion_diagnostics_rate_hz must be finite and non-negative");
+  }
+  if (!std::isfinite(body_prediction_timeout_sec_) ||
+      body_prediction_timeout_sec_ < 0.0 ||
+      body_prediction_timeout_sec_ > 1.0) {
+    throw std::runtime_error(
+        "body_prediction_timeout_sec must be finite and in the range [0, 1]");
+  }
+  if (!std::isfinite(fusion_skeleton_smoothing_) ||
+      fusion_skeleton_smoothing_ < 0.0 || fusion_skeleton_smoothing_ > 1.0) {
+    throw std::runtime_error(
+        "fusion_skeleton_smoothing must be finite and in the range [0, 1]");
   }
   if (confidence_threshold_ < 0.0 || confidence_threshold_ > 100.0) {
     throw std::runtime_error(
@@ -410,6 +489,10 @@ void ZedBodyFusionNode::loadParameters() {
     throw std::runtime_error(
         "fusion_minimum_allowed_cameras must be in the range [1, " +
         std::to_string(camera_specs_.size()) + "]");
+  }
+  if (fusion_minimum_allowed_keypoints_ <= 0) {
+    throw std::runtime_error(
+        "fusion_minimum_allowed_keypoints must be positive");
   }
 }
 
@@ -695,7 +778,7 @@ void ZedBodyFusionNode::configureImageProcessing(CameraWorker &worker) {
 
   if (image_processor_) {
     RCLCPP_INFO(get_logger(),
-                "Passing pristine frames for serial %u to the in-process "
+                "Queueing owned frames for serial %u to the asynchronous "
                 "image processor",
                 worker.serial_number);
   }
@@ -738,11 +821,6 @@ bool ZedBodyFusionNode::hasOverlayImageSubscribers(
          worker.overlay_image_pub->get_subscription_count() > 0;
 }
 
-bool ZedBodyFusionNode::shouldRetrieveImage(const CameraWorker &worker) const {
-  return static_cast<bool>(image_processor_) ||
-         hasOverlayImageSubscribers(worker);
-}
-
 builtin_interfaces::msg::Time
 ZedBodyFusionNode::timeFromNanoseconds(uint64_t timestamp_ns) const {
   builtin_interfaces::msg::Time stamp;
@@ -766,12 +844,45 @@ ZedBodyFusionNode::imageTimestamp(sl::Camera &camera) {
 
 void ZedBodyFusionNode::publishImage(CameraWorker &worker,
                                      rclcpp::Clock &steady_clock) {
-  if (!shouldRetrieveImage(worker)) {
+  const bool render_debug = hasOverlayImageSubscribers(worker);
+  bool process_frame = false;
+  if (image_processor_) {
+    try {
+      process_frame = image_processor_.should_process(worker.camera_name);
+    } catch (const std::exception &error) {
+      RCLCPP_WARN_THROTTLE(get_logger(), steady_clock, 2000,
+                           "Camera serial %u image admission failed: %s",
+                           worker.serial_number, error.what());
+      return;
+    } catch (...) {
+      RCLCPP_WARN_THROTTLE(
+          get_logger(), steady_clock, 2000,
+          "Camera serial %u image admission failed with an unknown exception",
+          worker.serial_number);
+      return;
+    }
+  }
+
+  // With an in-process detector, the debug output is deliberately published at
+  // the admitted detector rate. This keeps every published image a genuinely
+  // combined skeleton + AprilTag overlay and avoids doing image/depth work for
+  // frames that the detector would immediately throttle.
+  if ((image_processor_ && !process_frame) ||
+      (!image_processor_ && !render_debug)) {
     return;
   }
 
-  const auto err = worker.camera.retrieveImage(worker.image, sl::VIEW::LEFT_BGR,
-                                               sl::MEM::CPU);
+  const bool retrieve_color = render_debug;
+  const auto image_view =
+      retrieve_color ? sl::VIEW::LEFT_BGR : sl::VIEW::LEFT_GRAY;
+  const auto image_retrieval_start = std::chrono::steady_clock::now();
+  const auto err =
+      worker.camera.retrieveImage(worker.image, image_view, sl::MEM::CPU);
+  worker.last_image_retrieval_ns.store(
+      std::chrono::duration_cast<std::chrono::nanoseconds>(
+          std::chrono::steady_clock::now() - image_retrieval_start)
+          .count(),
+      std::memory_order_relaxed);
   if (err != sl::ERROR_CODE::SUCCESS) {
     RCLCPP_WARN_THROTTLE(get_logger(), steady_clock, 2000,
                          "Camera serial %u image retrieval failed: %s",
@@ -793,9 +904,11 @@ void ZedBodyFusionNode::publishImage(CameraWorker &worker,
   image_msg.header.frame_id = worker.image_frame_id;
   image_msg.height = worker.image.getHeight();
   image_msg.width = worker.image.getWidth();
-  image_msg.encoding = sensor_msgs::image_encodings::BGR8;
+  image_msg.encoding = retrieve_color ? sensor_msgs::image_encodings::BGR8
+                                      : sensor_msgs::image_encodings::MONO8;
   image_msg.is_bigendian = false;
-  image_msg.step = image_msg.width * 3;
+  const uint32_t bytes_per_pixel = retrieve_color ? 3U : 1U;
+  image_msg.step = image_msg.width * bytes_per_pixel;
 
   const size_t src_step = worker.image.getStepBytes(sl::MEM::CPU);
   if (src_step < image_msg.step) {
@@ -837,61 +950,63 @@ void ZedBodyFusionNode::publishImage(CameraWorker &worker,
   camera_info_msg.width = image_msg.width;
   camera_info_msg.height = image_msg.height;
 
-  bool depth_attempted = false;
-  std::optional<DepthFrameView> depth_view;
-  const DepthFrameProvider depth_provider =
-      [this, &worker, &steady_clock, &image_msg, &depth_attempted,
-       &depth_view]() -> std::optional<DepthFrameView> {
-    if (depth_attempted) {
-      return depth_view;
-    }
-    depth_attempted = true;
-
+  std::optional<OwnedDepthFrame> owned_depth;
+  if (process_frame && image_processor_.needs_depth) {
+    const auto depth_retrieval_start = std::chrono::steady_clock::now();
     const auto depth_err = worker.camera.retrieveMeasure(
         worker.depth, sl::MEASURE::DEPTH, sl::MEM::CPU,
         sl::Resolution(static_cast<int>(image_msg.width),
                        static_cast<int>(image_msg.height)));
+    worker.last_depth_retrieval_ns.store(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now() - depth_retrieval_start)
+            .count(),
+        std::memory_order_relaxed);
     if (depth_err != sl::ERROR_CODE::SUCCESS) {
       RCLCPP_WARN_THROTTLE(get_logger(), steady_clock, 2000,
                            "Camera serial %u depth retrieval failed: %s",
                            worker.serial_number,
                            zedErrorToString(depth_err).c_str());
-      return std::nullopt;
-    }
-    if (worker.depth.getDataType() != sl::MAT_TYPE::F32_C1) {
+    } else if (worker.depth.getDataType() != sl::MAT_TYPE::F32_C1) {
       RCLCPP_WARN_THROTTLE(
           get_logger(), steady_clock, 2000,
           "Camera serial %u returned a non-F32_C1 depth buffer",
           worker.serial_number);
-      return std::nullopt;
+    } else {
+      const auto *depth_data = reinterpret_cast<const float *>(
+          worker.depth.getPtr<sl::float1>(sl::MEM::CPU));
+      const std::size_t depth_width = worker.depth.getWidth();
+      const std::size_t depth_height = worker.depth.getHeight();
+      const std::size_t depth_stride = worker.depth.getStepBytes(sl::MEM::CPU);
+      const DepthFrameView candidate{depth_data, depth_width, depth_height,
+                                     depth_stride};
+      if (!candidate) {
+        RCLCPP_WARN_THROTTLE(
+            get_logger(), steady_clock, 2000,
+            "Camera serial %u returned an invalid depth buffer",
+            worker.serial_number);
+      } else {
+        OwnedDepthFrame copy;
+        copy.width = depth_width;
+        copy.height = depth_height;
+        copy.data.resize(depth_width * depth_height);
+        const auto copy_bytes = depth_width * sizeof(float);
+        for (std::size_t row = 0; row < depth_height; ++row) {
+          std::memcpy(copy.data.data() + row * depth_width,
+                      reinterpret_cast<const uint8_t *>(depth_data) +
+                          row * depth_stride,
+                      copy_bytes);
+        }
+        owned_depth = std::move(copy);
+      }
     }
+  }
 
-    const auto *depth_data = reinterpret_cast<const float *>(
-        worker.depth.getPtr<sl::float1>(sl::MEM::CPU));
-    const std::size_t depth_width = worker.depth.getWidth();
-    const std::size_t depth_height = worker.depth.getHeight();
-    const std::size_t depth_stride = worker.depth.getStepBytes(sl::MEM::CPU);
-    const DepthFrameView candidate{depth_data, depth_width, depth_height,
-                                   depth_stride};
-    if (!candidate) {
-      RCLCPP_WARN_THROTTLE(get_logger(), steady_clock, 2000,
-                           "Camera serial %u returned an invalid depth buffer",
-                           worker.serial_number);
-      return std::nullopt;
-    }
-
-    depth_view = candidate;
-    return depth_view;
-  };
-
-  const bool render_debug = hasOverlayImageSubscribers(worker);
-  sensor_msgs::msg::Image debug_overlay;
-  sensor_msgs::msg::Image *debug_overlay_ptr = nullptr;
+  std::optional<sensor_msgs::msg::Image> debug_overlay;
   if (render_debug) {
     debug_overlay = image_msg;
-    debug_overlay_ptr = &debug_overlay;
     try {
-      drawSkeletonOverlay(worker, debug_overlay);
+      drawSkeletonOverlay(worker, *debug_overlay);
     } catch (const cv::Exception &error) {
       RCLCPP_WARN_THROTTLE(
           get_logger(), steady_clock, 2000,
@@ -905,26 +1020,34 @@ void ZedBodyFusionNode::publishImage(CameraWorker &worker,
     }
   }
 
-  if (image_processor_) {
+  if (process_frame) {
+    ImageProcessor::DebugPublisher debug_publisher;
+    if (render_debug) {
+      const auto publisher = worker.overlay_image_pub;
+      debug_publisher =
+          [publisher](sensor_msgs::msg::Image &&combined_overlay) {
+            publisher->publish(std::move(combined_overlay));
+          };
+    }
+
     try {
-      image_processor_(worker.camera_name, image_msg, camera_info_msg,
-                       depth_provider, debug_overlay_ptr);
+      image_processor_.submit(worker.camera_name, std::move(image_msg),
+                              std::move(camera_info_msg),
+                              std::move(owned_depth), std::move(debug_overlay),
+                              std::move(debug_publisher));
     } catch (const std::exception &error) {
-      RCLCPP_WARN_THROTTLE(
-          get_logger(), steady_clock, 2000,
-          "Camera serial %u in-process image processing failed: %s",
-          worker.serial_number, error.what());
+      RCLCPP_WARN_THROTTLE(get_logger(), steady_clock, 2000,
+                           "Camera serial %u image queue submission failed: %s",
+                           worker.serial_number, error.what());
     } catch (...) {
       RCLCPP_WARN_THROTTLE(
           get_logger(), steady_clock, 2000,
-          "Camera serial %u in-process image processing failed with an "
+          "Camera serial %u image queue submission failed with an "
           "unknown exception",
           worker.serial_number);
     }
-  }
-
-  if (render_debug) {
-    worker.overlay_image_pub->publish(std::move(debug_overlay));
+  } else if (debug_overlay) {
+    worker.overlay_image_pub->publish(std::move(*debug_overlay));
   }
 }
 
@@ -1090,13 +1213,29 @@ void ZedBodyFusionNode::startCameraPublishers() {
                                zedErrorToString(err));
     }
 
-    const auto opened_serial =
-        worker->camera.getCameraInformation().serial_number;
+    const auto opened_information = worker->camera.getCameraInformation();
+    const auto opened_serial = opened_information.serial_number;
     if (opened_serial != worker->serial_number) {
       throw std::runtime_error(
           "ZED source on port " + std::to_string(streamPortForConfig(config)) +
           " reports serial " + std::to_string(opened_serial) + ", expected " +
           std::to_string(worker->serial_number));
+    }
+    worker->opened_camera_fps = opened_information.camera_configuration.fps;
+    worker->opened_image_width =
+        opened_information.camera_configuration.resolution.width;
+    worker->opened_image_height =
+        opened_information.camera_configuration.resolution.height;
+    RCLCPP_INFO(get_logger(),
+                "Camera serial %u reports an active %zux%zu stream at %d FPS",
+                worker->serial_number, worker->opened_image_width,
+                worker->opened_image_height, worker->opened_camera_fps);
+    if (input_mode_ == "stream" && worker->opened_camera_fps != camera_fps_) {
+      RCLCPP_WARN(
+          get_logger(),
+          "Camera serial %u is streaming at %d FPS, not the requested %d FPS; "
+          "restart the remote server with matching stream settings",
+          worker->serial_number, worker->opened_camera_fps, camera_fps_);
     }
 
     configurePerCameraBodyPublishing(*worker);
@@ -1122,6 +1261,8 @@ void ZedBodyFusionNode::startCameraPublishers() {
     body_params.enable_tracking = sender_tracking_enabled_;
     body_params.enable_body_fitting = false;
     body_params.enable_segmentation = false;
+    body_params.prediction_timeout_s =
+        static_cast<float>(body_prediction_timeout_sec_);
     body_params.allow_reduced_precision_inference =
         allow_reduced_precision_inference_;
 
@@ -1207,11 +1348,16 @@ void ZedBodyFusionNode::runCameraWorker(CameraWorker &worker) {
   while (rclcpp::ok() && worker.running.load()) {
     auto err = worker.camera.grab();
     if (err != sl::ERROR_CODE::SUCCESS) {
+      worker.grab_failure_count.fetch_add(1, std::memory_order_relaxed);
+      if (err == sl::ERROR_CODE::CORRUPTED_FRAME) {
+        worker.corrupted_frame_count.fetch_add(1, std::memory_order_relaxed);
+      }
       RCLCPP_WARN_THROTTLE(get_logger(), steady_clock, 2000,
                            "Camera serial %u grab failed: %s",
                            worker.serial_number, zedErrorToString(err).c_str());
       std::this_thread::sleep_for(std::chrono::milliseconds(2));
     } else {
+      worker.grab_success_count.fetch_add(1, std::memory_order_relaxed);
       updateCameraGravityRotation(worker);
       publishImage(worker, steady_clock);
     }
@@ -1221,14 +1367,17 @@ void ZedBodyFusionNode::runCameraWorker(CameraWorker &worker) {
 void ZedBodyFusionNode::processFusion() {
   auto fusion_err = fusion_.process();
   if (fusion_err == sl::FUSION_ERROR_CODE::NO_NEW_DATA_AVAILABLE) {
+    fusion_no_data_count_.fetch_add(1, std::memory_order_relaxed);
     return;
   }
   if (fusion_err != sl::FUSION_ERROR_CODE::SUCCESS) {
+    fusion_process_failure_count_.fetch_add(1, std::memory_order_relaxed);
     RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
                          "Fusion process failed: %s",
                          fusionErrorToString(fusion_err).c_str());
     return;
   }
+  fusion_process_success_count_.fetch_add(1, std::memory_order_relaxed);
 
   if (!camera_transforms_published_) {
     camera_transforms_published_ = publishStaticCameraTransforms();
@@ -1248,10 +1397,317 @@ void ZedBodyFusionNode::processFusion() {
     return;
   }
 
-  pub_bodies_->publish(toRosMessage(bodies));
+  auto message = toRosMessage(bodies);
+  recordFusedMessage(!message.objects.empty());
+  pub_bodies_->publish(std::move(message));
   if (publish_per_camera_skeletons_) {
     publishPerCameraBodies();
   }
+}
+
+void ZedBodyFusionNode::recordFusedMessage(bool nonempty) {
+  fused_message_count_.fetch_add(1, std::memory_order_relaxed);
+  if (nonempty) {
+    fused_nonempty_message_count_.fetch_add(1, std::memory_order_relaxed);
+  }
+
+  const auto now_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                          std::chrono::steady_clock::now().time_since_epoch())
+                          .count();
+  const auto previous_ns =
+      last_fused_message_steady_ns_.exchange(now_ns, std::memory_order_relaxed);
+  if (previous_ns <= 0 || now_ns <= previous_ns) {
+    return;
+  }
+
+  const auto gap_ns = static_cast<uint64_t>(now_ns - previous_ns);
+  auto previous_max = max_fused_message_gap_ns_.load(std::memory_order_relaxed);
+  while (gap_ns > previous_max &&
+         !max_fused_message_gap_ns_.compare_exchange_weak(
+             previous_max, gap_ns, std::memory_order_relaxed,
+             std::memory_order_relaxed)) {
+  }
+}
+
+void ZedBodyFusionNode::publishDiagnostics() {
+  if (!diagnostics_pub_) {
+    return;
+  }
+
+  using DiagnosticStatus = diagnostic_msgs::msg::DiagnosticStatus;
+
+  const auto steady_now = std::chrono::steady_clock::now();
+  const double sample_duration_sec =
+      std::chrono::duration<double>(steady_now - diagnostics_last_sample_at_)
+          .count();
+  const bool warmup_complete =
+      steady_now - diagnostics_started_at_ >= std::chrono::seconds(5);
+
+  const auto fused_message_count =
+      fused_message_count_.load(std::memory_order_relaxed);
+  const auto nonempty_message_count =
+      fused_nonempty_message_count_.load(std::memory_order_relaxed);
+  auto maximum_gap_ns =
+      max_fused_message_gap_ns_.load(std::memory_order_relaxed);
+  const auto last_message_ns =
+      last_fused_message_steady_ns_.load(std::memory_order_relaxed);
+  const auto steady_now_ns =
+      std::chrono::duration_cast<std::chrono::nanoseconds>(
+          steady_now.time_since_epoch())
+          .count();
+  if (last_message_ns > 0 && steady_now_ns > last_message_ns) {
+    maximum_gap_ns = std::max(
+        maximum_gap_ns, static_cast<uint64_t>(steady_now_ns - last_message_ns));
+  }
+  const double fused_rate_hz =
+      sample_duration_sec > 0.0
+          ? static_cast<double>(fused_message_count -
+                                diagnostics_last_fused_message_count_) /
+                sample_duration_sec
+          : 0.0;
+  const double nonempty_rate_hz =
+      sample_duration_sec > 0.0
+          ? static_cast<double>(nonempty_message_count -
+                                diagnostics_last_nonempty_message_count_) /
+                sample_duration_sec
+          : 0.0;
+
+  diagnostics_last_sample_at_ = steady_now;
+  diagnostics_last_fused_message_count_ = fused_message_count;
+  diagnostics_last_nonempty_message_count_ = nonempty_message_count;
+
+  sl::FusionMetrics metrics;
+  const auto metrics_error = fusion_.getProcessMetrics(metrics);
+  const auto sender_states = fusion_.getSenderState();
+  std::vector<ImageProcessorCameraStats> image_processor_stats;
+  if (image_processor_ && image_processor_.stats) {
+    try {
+      image_processor_stats = image_processor_.stats();
+    } catch (const std::exception &error) {
+      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
+                           "Image processor diagnostics failed: %s",
+                           error.what());
+    } catch (...) {
+      RCLCPP_WARN_THROTTLE(
+          get_logger(), *get_clock(), 2000,
+          "Image processor diagnostics failed with an unknown exception");
+    }
+  }
+
+  diagnostic_msgs::msg::DiagnosticArray message;
+  message.header.stamp = now();
+  message.status.reserve(workers_.size() + 1);
+
+  DiagnosticStatus fusion_status;
+  fusion_status.name = "zed_fusion/fusion";
+  fusion_status.hardware_id = "zed_fusion";
+  fusion_status.level = DiagnosticStatus::OK;
+  fusion_status.message = "Fusion operating normally";
+
+  addDiagnosticValue(
+      fusion_status, "process_success_total",
+      fusion_process_success_count_.load(std::memory_order_relaxed));
+  addDiagnosticValue(fusion_status, "process_no_data_total",
+                     fusion_no_data_count_.load(std::memory_order_relaxed));
+  addDiagnosticValue(
+      fusion_status, "process_failure_total",
+      fusion_process_failure_count_.load(std::memory_order_relaxed));
+  addDiagnosticValue(fusion_status, "fused_messages_total",
+                     fused_message_count);
+  addDiagnosticValue(fusion_status, "fused_nonempty_messages_total",
+                     nonempty_message_count);
+  addDiagnosticFloat(fusion_status, "fused_message_rate_hz", fused_rate_hz);
+  addDiagnosticFloat(fusion_status, "fused_nonempty_rate_hz", nonempty_rate_hz);
+  addDiagnosticFloat(fusion_status, "maximum_fused_message_gap_sec",
+                     static_cast<double>(maximum_gap_ns) / 1.0e9);
+
+  if (metrics_error == sl::FUSION_ERROR_CODE::SUCCESS) {
+    addDiagnosticFloat(fusion_status, "mean_cameras_fused",
+                       metrics.mean_camera_fused);
+    addDiagnosticFloat(fusion_status, "mean_inter_camera_timestamp_stdev_sec",
+                       metrics.mean_stdev_between_camera);
+    if (warmup_complete &&
+        metrics.mean_camera_fused <
+            static_cast<float>(fusion_minimum_allowed_cameras_)) {
+      raiseDiagnostic(fusion_status, DiagnosticStatus::WARN,
+                      "Too few cameras contributing to Fusion");
+    }
+  } else {
+    addDiagnosticValue(fusion_status, "metrics_error",
+                       fusionErrorToString(metrics_error));
+    raiseDiagnostic(fusion_status, DiagnosticStatus::WARN,
+                    "Fusion performance metrics unavailable");
+  }
+
+  message.status.push_back(std::move(fusion_status));
+
+  constexpr double kMaximumCorruptedFrameRatio = 0.001;
+  const auto history_cutoff = steady_now - std::chrono::minutes(1);
+
+  for (auto &worker : workers_) {
+    DiagnosticStatus camera_status;
+    camera_status.name = "zed_fusion/camera/" + worker->camera_name;
+    camera_status.hardware_id = std::to_string(worker->serial_number);
+    camera_status.level = DiagnosticStatus::OK;
+    camera_status.message = "Camera sender operating normally";
+
+    const auto grab_success =
+        worker->grab_success_count.load(std::memory_order_relaxed);
+    const auto grab_failure =
+        worker->grab_failure_count.load(std::memory_order_relaxed);
+    const auto corrupted_frames =
+        worker->corrupted_frame_count.load(std::memory_order_relaxed);
+    const auto total_grabs = grab_success + grab_failure;
+
+    if (worker->diagnostic_grab_history.empty()) {
+      worker->diagnostic_grab_history.push_back(
+          CameraWorker::GrabCounterSample{diagnostics_started_at_, 0, 0, 0});
+    }
+    worker->diagnostic_grab_history.push_back(CameraWorker::GrabCounterSample{
+        steady_now, grab_success, total_grabs, corrupted_frames});
+    while (worker->diagnostic_grab_history.size() > 2 &&
+           worker->diagnostic_grab_history[1].timestamp <= history_cutoff) {
+      worker->diagnostic_grab_history.pop_front();
+    }
+
+    const auto &window_start = worker->diagnostic_grab_history.front();
+    const auto window_successful = grab_success - window_start.successful;
+    const auto window_grabs = total_grabs - window_start.total;
+    const auto window_corrupted = corrupted_frames - window_start.corrupted;
+    const double window_duration_sec =
+        std::chrono::duration<double>(steady_now - window_start.timestamp)
+            .count();
+    const double local_grab_rate_hz =
+        window_duration_sec > 0.0
+            ? static_cast<double>(window_successful) / window_duration_sec
+            : 0.0;
+    const double corrupted_ratio = window_grabs > 0
+                                       ? static_cast<double>(window_corrupted) /
+                                             static_cast<double>(window_grabs)
+                                       : 0.0;
+
+    addDiagnosticValue(camera_status, "grab_success_total", grab_success);
+    addDiagnosticValue(camera_status, "grab_failure_total", grab_failure);
+    addDiagnosticValue(camera_status, "corrupted_frames_total",
+                       corrupted_frames);
+    addDiagnosticValue(camera_status, "opened_stream_width",
+                       worker->opened_image_width);
+    addDiagnosticValue(camera_status, "opened_stream_height",
+                       worker->opened_image_height);
+    addDiagnosticValue(camera_status, "opened_stream_fps",
+                       worker->opened_camera_fps);
+    addDiagnosticValue(camera_status, "requested_camera_fps", camera_fps_);
+    addDiagnosticValue(camera_status, "rolling_window_successful_grabs",
+                       window_successful);
+    addDiagnosticValue(camera_status, "rolling_window_grabs", window_grabs);
+    addDiagnosticFloat(camera_status, "rolling_local_grab_rate_hz",
+                       local_grab_rate_hz);
+    addDiagnosticFloat(camera_status, "rolling_corrupted_frame_ratio",
+                       corrupted_ratio);
+    addDiagnosticFloat(camera_status, "last_image_retrieval_ms",
+                       static_cast<double>(worker->last_image_retrieval_ns.load(
+                           std::memory_order_relaxed)) /
+                           1.0e6);
+    addDiagnosticFloat(camera_status, "last_depth_retrieval_ms",
+                       static_cast<double>(worker->last_depth_retrieval_ns.load(
+                           std::memory_order_relaxed)) /
+                           1.0e6);
+
+    const auto processor_stats =
+        std::find_if(image_processor_stats.begin(), image_processor_stats.end(),
+                     [&worker](const ImageProcessorCameraStats &candidate) {
+                       return candidate.camera_name == worker->camera_name;
+                     });
+    if (processor_stats != image_processor_stats.end()) {
+      addDiagnosticValue(camera_status, "apriltag_frames_submitted_total",
+                         processor_stats->submitted);
+      addDiagnosticValue(camera_status, "apriltag_frames_processed_total",
+                         processor_stats->processed);
+      addDiagnosticValue(camera_status, "apriltag_pending_overwritten_total",
+                         processor_stats->overwritten);
+      addDiagnosticValue(camera_status, "apriltag_stale_dropped_total",
+                         processor_stats->stale_dropped);
+      addDiagnosticFloat(camera_status, "apriltag_last_processing_ms",
+                         processor_stats->last_processing_ms);
+      addDiagnosticFloat(camera_status, "apriltag_last_queue_age_ms",
+                         processor_stats->last_job_age_ms);
+    }
+
+    sl::CameraIdentifier identifier(worker->serial_number);
+    const auto sender = sender_states.find(identifier);
+    if (sender != sender_states.end()) {
+      addDiagnosticValue(camera_status, "sender_state",
+                         senderErrorToString(sender->second));
+      if (warmup_complete && sender->second != sl::SENDER_ERROR_CODE::SUCCESS) {
+        const auto level =
+            sender->second == sl::SENDER_ERROR_CODE::DISCONNECTED ||
+                    sender->second == sl::SENDER_ERROR_CODE::GRAB_ERROR
+                ? DiagnosticStatus::ERROR
+                : DiagnosticStatus::WARN;
+        raiseDiagnostic(camera_status, level,
+                        "Fusion sender state is " +
+                            senderErrorToString(sender->second));
+      }
+    } else {
+      addDiagnosticValue(camera_status, "sender_state", "UNKNOWN");
+      if (warmup_complete) {
+        raiseDiagnostic(camera_status, DiagnosticStatus::WARN,
+                        "Fusion sender state unavailable");
+      }
+    }
+
+    bool has_camera_metrics = false;
+    if (metrics_error == sl::FUSION_ERROR_CODE::SUCCESS) {
+      const auto camera_metrics =
+          metrics.camera_individual_stats.find(identifier);
+      if (camera_metrics != metrics.camera_individual_stats.end() &&
+          camera_metrics->second.is_present) {
+        has_camera_metrics = true;
+        const auto &stats = camera_metrics->second;
+        addDiagnosticFloat(camera_status, "received_fps", stats.received_fps);
+        addDiagnosticFloat(camera_status, "receive_latency_sec",
+                           stats.received_latency);
+        addDiagnosticFloat(camera_status, "synchronization_latency_sec",
+                           stats.synced_latency);
+        addDiagnosticFloat(camera_status, "timestamp_deviation_sec",
+                           stats.delta_ts);
+        addDiagnosticFloat(camera_status, "body_detection_ratio",
+                           stats.ratio_detection);
+        const double minimum_sender_fps =
+            0.9 * static_cast<double>(worker->opened_camera_fps);
+        if (warmup_complete && minimum_sender_fps > 0.0 &&
+            stats.received_fps < minimum_sender_fps) {
+          raiseDiagnostic(camera_status, DiagnosticStatus::WARN,
+                          "Fusion sender rate below 90% of opened stream FPS");
+        }
+      }
+    }
+    if (!has_camera_metrics && warmup_complete) {
+      raiseDiagnostic(camera_status, DiagnosticStatus::WARN,
+                      "Camera performance metrics unavailable");
+    }
+
+    if (warmup_complete && window_grabs > 0 &&
+        corrupted_ratio > kMaximumCorruptedFrameRatio) {
+      raiseDiagnostic(camera_status, DiagnosticStatus::WARN,
+                      "Corrupted grabs exceed 0.1% over the rolling minute");
+    }
+    if (warmup_complete && worker->opened_camera_fps > 0 &&
+        local_grab_rate_hz <
+            0.9 * static_cast<double>(worker->opened_camera_fps)) {
+      raiseDiagnostic(camera_status, DiagnosticStatus::WARN,
+                      "Local grab rate below 90% of the opened stream FPS");
+    }
+    if (worker->opened_camera_fps > 0 &&
+        worker->opened_camera_fps != camera_fps_) {
+      raiseDiagnostic(camera_status, DiagnosticStatus::WARN,
+                      "Opened stream FPS does not match requested camera FPS");
+    }
+
+    message.status.push_back(std::move(camera_status));
+  }
+
+  diagnostics_pub_->publish(std::move(message));
 }
 
 bool ZedBodyFusionNode::bodyPassesConfidence(const sl::BodyData &body) const {
@@ -1498,6 +1954,9 @@ void ZedBodyFusionNode::shutdown() {
 
   if (fusion_timer_) {
     fusion_timer_->cancel();
+  }
+  if (diagnostics_timer_) {
+    diagnostics_timer_->cancel();
   }
 
   for (auto &worker : workers_) {

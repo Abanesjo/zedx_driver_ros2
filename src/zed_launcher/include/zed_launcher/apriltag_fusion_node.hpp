@@ -4,6 +4,7 @@
 
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -44,11 +45,22 @@ public:
 
   bool enabled() const { return enabled_; }
 
+  bool usesDepth() const { return use_depth_; }
+
+  double maxDetectionRateHz() const { return max_detection_rate_hz_; }
+
+  double maxObservationAgeSec() const { return max_observation_age_sec_; }
+
+  const std::vector<std::string> &cameraNames() const { return camera_names_; }
+
+  bool shouldProcessCameraFrame(const std::string &camera_name);
+
   void processCameraFrame(const std::string &camera_name,
                           const sensor_msgs::msg::Image &source,
                           const sensor_msgs::msg::CameraInfo &camera_info,
                           const DepthFrameProvider &depth_provider,
-                          sensor_msgs::msg::Image *debug_overlay);
+                          sensor_msgs::msg::Image *debug_overlay,
+                          bool frame_was_admitted = false);
 
 private:
   friend class ApriltagFusionNodeTestPeer;
@@ -146,7 +158,7 @@ private:
     std::array<std::optional<Observation>, kTagCount> latest_observations;
     std::array<std::optional<TimedPoseEstimate>, kTagCount>
         latest_pose_estimates;
-    rclcpp::Time last_detection_attempt_time;
+    std::chrono::steady_clock::time_point last_detection_attempt_time;
     bool has_last_detection_attempt_time = false;
     std::mutex mutex;
   };
@@ -160,9 +172,10 @@ private:
   std::optional<sensor_msgs::msg::Image>
   processImage(size_t camera_index, const sensor_msgs::msg::Image &source,
                const DepthFrameProvider &depth_provider,
-               const sensor_msgs::msg::Image *debug_base, bool render_debug);
+               const sensor_msgs::msg::Image *debug_base, bool render_debug,
+               bool apply_rate_limit = true);
 
-  bool shouldSkipFrame(CameraContext &camera, const rclcpp::Time &current_time);
+  bool shouldSkipFrame(CameraContext &camera);
 
   void fuseAndPublish();
 

@@ -7,16 +7,21 @@
 
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include <builtin_interfaces/msg/time.hpp>
+#include <diagnostic_msgs/msg/diagnostic_array.hpp>
 #include <geometry_msgs/msg/transform_stamped.hpp>
 #include <opencv2/core.hpp>
 #include <rclcpp/rclcpp.hpp>
@@ -29,14 +34,41 @@ namespace zed_launcher {
 
 class ZedBodyFusionNode final : public rclcpp::Node {
 public:
-  using ImageProcessor = std::function<void(
-      const std::string &, const sensor_msgs::msg::Image &,
-      const sensor_msgs::msg::CameraInfo &, const DepthFrameProvider &,
-      sensor_msgs::msg::Image *)>;
+  struct ImageProcessorCameraStats {
+    std::string camera_name;
+    uint64_t submitted = 0;
+    uint64_t processed = 0;
+    uint64_t overwritten = 0;
+    uint64_t stale_dropped = 0;
+    double last_processing_ms = 0.0;
+    double last_job_age_ms = 0.0;
+  };
+
+  struct ImageProcessor {
+    using DebugPublisher =
+        std::function<void(sensor_msgs::msg::Image &&debug_image)>;
+    using Submit = std::function<void(
+        std::string camera_name, sensor_msgs::msg::Image source,
+        sensor_msgs::msg::CameraInfo camera_info,
+        std::optional<OwnedDepthFrame> depth,
+        std::optional<sensor_msgs::msg::Image> debug_overlay,
+        DebugPublisher debug_publisher)>;
+
+    ImageProcessor() : needs_depth(false) {}
+
+    std::function<bool(const std::string &camera_name)> should_process;
+    Submit submit;
+    std::function<std::vector<ImageProcessorCameraStats>()> stats;
+    bool needs_depth;
+
+    [[nodiscard]] explicit operator bool() const noexcept {
+      return static_cast<bool>(should_process) && static_cast<bool>(submit);
+    }
+  };
 
   explicit ZedBodyFusionNode(
       const rclcpp::NodeOptions &options = rclcpp::NodeOptions(),
-      ImageProcessor image_processor = {},
+      ImageProcessor image_processor = ImageProcessor{},
       const std::string &node_namespace = "");
 
   ~ZedBodyFusionNode() override;
@@ -49,6 +81,13 @@ private:
   };
 
   struct CameraWorker {
+    struct GrabCounterSample {
+      std::chrono::steady_clock::time_point timestamp;
+      uint64_t successful = 0;
+      uint64_t total = 0;
+      uint64_t corrupted = 0;
+    };
+
     sl::FusionConfiguration config;
     sl::Camera camera;
     sl::Mat image;
@@ -62,9 +101,18 @@ private:
     std::string camera_name;
     std::string image_frame_id;
     unsigned int serial_number = 0;
+    int opened_camera_fps = 0;
+    std::size_t opened_image_width = 0;
+    std::size_t opened_image_height = 0;
     std::mutex gravity_pose_mutex;
     std::array<double, 4> gravity_quaternion{};
     bool has_gravity_pose = false;
+    std::atomic<uint64_t> grab_success_count{0};
+    std::atomic<uint64_t> grab_failure_count{0};
+    std::atomic<uint64_t> corrupted_frame_count{0};
+    std::atomic<int64_t> last_image_retrieval_ns{0};
+    std::atomic<int64_t> last_depth_retrieval_ns{0};
+    std::deque<GrabCounterSample> diagnostic_grab_history;
   };
 
   void loadParameters();
@@ -105,8 +153,6 @@ private:
 
   bool hasOverlayImageSubscribers(const CameraWorker &worker) const;
 
-  bool shouldRetrieveImage(const CameraWorker &worker) const;
-
   builtin_interfaces::msg::Time
   timeFromNanoseconds(uint64_t timestamp_ns) const;
 
@@ -138,6 +184,10 @@ private:
   void runCameraWorker(CameraWorker &worker);
 
   void processFusion();
+
+  void publishDiagnostics();
+
+  void recordFusedMessage(bool nonempty);
 
   bool bodyPassesConfidence(const sl::BodyData &body) const;
 
@@ -179,13 +229,13 @@ private:
   std::string stream_address_;
 
   sl::BODY_TRACKING_MODEL body_model_ =
-      sl::BODY_TRACKING_MODEL::HUMAN_BODY_ACCURATE;
+      sl::BODY_TRACKING_MODEL::HUMAN_BODY_FAST;
 
   sl::BODY_FORMAT body_format_ = sl::BODY_FORMAT::BODY_38;
 
   sl::DEPTH_MODE depth_mode_ = sl::DEPTH_MODE::NEURAL_LIGHT;
 
-  sl::RESOLUTION camera_resolution_ = sl::RESOLUTION::HD1080;
+  sl::RESOLUTION camera_resolution_ = sl::RESOLUTION::SVGA;
 
   sl::FUSION_REFERENCE_FRAME fusion_reference_frame_ =
       sl::FUSION_REFERENCE_FRAME::BASELINK;
@@ -202,9 +252,9 @@ private:
 
   double single_body_switch_margin_ = 10.0;
 
-  double fusion_skeleton_smoothing_ = 0.0;
+  double fusion_skeleton_smoothing_ = 1.0;
 
-  int fusion_minimum_allowed_cameras_ = 2;
+  int fusion_minimum_allowed_cameras_ = 1;
 
   int fusion_minimum_allowed_keypoints_ = 7;
 
@@ -212,7 +262,7 @@ private:
 
   int sdk_gpu_id_ = -1;
 
-  int single_body_switch_frames_ = 5;
+  int single_body_switch_frames_ = 60;
 
   int selected_body_id_ = -1;
 
@@ -222,13 +272,17 @@ private:
 
   double fusion_publish_rate_hz_ = 60.0;
 
+  double fusion_diagnostics_rate_hz_ = 1.0;
+
+  double body_prediction_timeout_sec_ = 0.4;
+
   bool single_body_enabled_ = true;
 
   bool publish_overlay_images_ = true;
 
   bool publish_per_camera_skeletons_ = false;
 
-  bool sender_tracking_enabled_ = false;
+  bool sender_tracking_enabled_ = true;
 
   bool fusion_tracking_enabled_ = true;
 
@@ -252,11 +306,38 @@ private:
 
   rclcpp::Publisher<zed_msgs::msg::ObjectsStamped>::SharedPtr pub_bodies_;
 
+  rclcpp::Publisher<diagnostic_msgs::msg::DiagnosticArray>::SharedPtr
+      diagnostics_pub_;
+
   rclcpp::TimerBase::SharedPtr fusion_timer_;
+
+  rclcpp::TimerBase::SharedPtr diagnostics_timer_;
 
   std::unique_ptr<tf2_ros::StaticTransformBroadcaster> static_tf_broadcaster_;
 
   bool camera_transforms_published_ = false;
+
+  std::chrono::steady_clock::time_point diagnostics_started_at_;
+
+  std::chrono::steady_clock::time_point diagnostics_last_sample_at_;
+
+  uint64_t diagnostics_last_fused_message_count_ = 0;
+
+  uint64_t diagnostics_last_nonempty_message_count_ = 0;
+
+  std::atomic<uint64_t> fusion_process_success_count_{0};
+
+  std::atomic<uint64_t> fusion_no_data_count_{0};
+
+  std::atomic<uint64_t> fusion_process_failure_count_{0};
+
+  std::atomic<uint64_t> fused_message_count_{0};
+
+  std::atomic<uint64_t> fused_nonempty_message_count_{0};
+
+  std::atomic<int64_t> last_fused_message_steady_ns_{0};
+
+  std::atomic<uint64_t> max_fused_message_gap_ns_{0};
 
   std::atomic_bool shutting_down_{false};
 };
