@@ -1,5 +1,5 @@
-FROM stereolabs/zed:5.3.0-py-devel-l4t-r36.4
-# FROM stereolabs/zed:5.3-gl-devel-cuda12.8-ubuntu22.04
+# FROM stereolabs/zed:5.3.0-py-devel-l4t-r36.4
+FROM stereolabs/zed:5.3-gl-devel-cuda12.8-ubuntu22.04
 
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -24,7 +24,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get update
 
 # ROS 2 + dependencies
-RUN apt-get install -y --no-install-recommends \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     ros-humble-desktop \
     ros-humble-rmw-cyclonedds-cpp \
     ros-humble-rosidl-generator-dds-idl \
@@ -34,6 +34,8 @@ RUN apt-get install -y --no-install-recommends \
     python3-pip \
     libyaml-cpp-dev \
     libeigen3-dev \
+    libopencv-dev \
+    nlohmann-json3-dev \
     libboost-all-dev \
     libspdlog-dev \
     libfmt-dev \

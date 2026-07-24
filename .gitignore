@@ -1,2 +1,8 @@
 .vscode/*
 references/*
+.history/
+build/
+install/
+log/
+src/apriltag_prints/**
+src/bag/**

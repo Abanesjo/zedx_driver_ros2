@@ -1,47 +1,184 @@
 <launch>
+  <arg name="camera_resolution" default="HD1080" />
+  <arg name="camera_fps" default="30" />
   <arg name="debug" default="false" />
-  <arg name="camera_fps" default="60" />
-  <arg name="fusion_publish_rate_hz" default="60.0" />
+  <arg name="fusion_publish_rate_hz" default="20.0" />
+  <arg name="fusion_diagnostics_rate_hz" default="1.0" />
 
   <arg name="role" default="local" />
   <arg name="input_mode" default="stream" />
   <arg name="stream_address" default="$(env ZED_BOX_IP 127.0.0.1)" />
-  <arg name="left_stream_port" default="30000" />
-  <arg name="right_stream_port" default="30002" />
-  <arg name="left_camera_name" default="zed_left" />
-  <arg name="right_camera_name" default="zed_right" />
-  <arg name="left_serial" default="41235597" />
-  <arg name="right_serial" default="49967328" />
+  <arg
+    name="camera_names"
+    default="['zed_left', 'zed_center', 'zed_right']"
+  />
+  <arg
+    name="camera_serials"
+    default="[41235597, 46229474, 49967328]"
+  />
+  <arg name="stream_ports" default="[30000, 30004, 30002]" />
   <arg
     name="fusion_config_path"
     default="$(find-pkg-share zed_launcher)/calibration/calibration.json"
   />
   <!-- Options: HUMAN_BODY_FAST, HUMAN_BODY_MEDIUM, HUMAN_BODY_ACCURATE -->
-  <arg name="body_model" default="HUMAN_BODY_FAST" />
+  <arg name="body_model" default="HUMAN_BODY_ACCURATE" />
   <!-- Options: BODY_18, BODY_34, BODY_38 -->
-  <arg name="body_format" default="BODY_38" />
-  <!-- confidence threshold for body tracking -->
-  <arg name="confidence_threshold" default="70.0" />
+  <arg name="body_format" default="BODY_18" />
+  <!--
+    Confidence threshold for body tracking. Live human/robot testing selected
+    65 as the lowest value with a useful margin above the humanoid false
+    positives while preserving reliable multi-camera human detections.
+  -->
+  <arg name="confidence_threshold" default="65.0" />
   <!-- to publish only one skeleton -->
   <arg name="single_body_enabled" default="true" />
   <!-- when switching from one skeleton to another, the confidence difference must be greater than the margin -->
   <arg name="single_body_switch_margin" default="10.0" />
   <!-- confidence must be greater for X frames -->
-  <arg name="single_body_switch_frames" default="60" />
+  <arg name="single_body_switch_frames" default="30" />
+  <!-- Stable ROS-facing ID used only while single_body_enabled is true. -->
+  <arg name="single_body_logical_id" default="0" />
+  <!-- Continuity bridge and camera-fallback root correction limits. -->
+  <arg name="single_body_bridge_timeout_sec" default="0.5" />
+  <arg name="single_body_bridge_max_speed_mps" default="2.0" />
+  <arg name="camera_body_fallback_enabled" default="true" />
+  <arg name="camera_body_fallback_minimum_cameras" default="2" />
+  <arg name="camera_body_fallback_consensus_distance_m" default="0.5" />
+  <arg name="fused_body_max_jump_m" default="0.5" />
+  <arg name="body_prediction_timeout_sec" default="1.0" />
   <arg name="publish_frame_id" default="fusion_world" />
   <arg name="output_topic" default="body_trk/skeletons" />
-  <arg name="camera_resolution" default="HD1080" />
-  <arg name="publish_images" default="false" />
-  <arg name="publish_overlay_images" default="$(var debug)" />
+  <arg name="enable_apriltag_fusion" default="true" />
   <arg name="publish_per_camera_skeletons" default="$(var debug)" />
   <arg name="overlay_min_confidence" default="$(var confidence_threshold)" />
   <arg name="overlay_max_skeleton_age_sec" default="0.5" />
+  <arg name="apriltag_front_tag_id" default="0" />
+  <arg name="apriltag_back_tag_id" default="1" />
+  <arg name="apriltag_front_tag_size_m" default="0.12" />
+  <arg name="apriltag_back_tag_size_m" default="0.12" />
+  <arg name="apriltag_tag_frame_id" default="tag_frame" />
+  <arg
+    name="apriltag_pose_topic"
+    default="/fusion_world_pose_in_tag_frame"
+  />
+  <arg name="apriltag_initial_tag_frame_offset_m" default="0.03" />
+  <arg name="apriltag_learn_tag_separation" default="true" />
+  <arg name="apriltag_tag_separation_ema_alpha" default="0.05" />
+  <arg
+    name="apriltag_tag_separation_max_innovation_m"
+    default="0.02"
+  />
+  <arg name="apriltag_use_depth" default="true" />
+  <arg name="apriltag_depth_inner_margin_ratio" default="0.20" />
+  <arg name="apriltag_depth_min_valid_samples" default="25" />
+  <arg name="apriltag_depth_min_valid_fraction" default="0.25" />
+  <arg
+    name="apriltag_depth_plane_inlier_threshold_m"
+    default="0.015"
+  />
+  <arg name="apriltag_depth_plane_max_rmse_m" default="0.010" />
+  <arg
+    name="apriltag_depth_max_pnp_translation_delta_m"
+    default="0.20"
+  />
+  <arg
+    name="apriltag_depth_max_pnp_rotation_delta_deg"
+    default="20.0"
+  />
+  <arg
+    name="apriltag_depth_max_size_error_fraction"
+    default="0.25"
+  />
+  <arg
+    name="apriltag_pnp_ambiguity_reprojection_margin_px"
+    default="0.25"
+  />
+  <arg name="apriltag_pnp_prior_max_age_sec" default="0.25" />
+  <arg name="apriltag_learn_tag_transform" default="true" />
+  <arg
+    name="apriltag_tag_transform_bootstrap_duration_sec"
+    default="2.5"
+  />
+  <arg
+    name="apriltag_tag_transform_bootstrap_min_samples"
+    default="30"
+  />
+  <arg
+    name="apriltag_tag_transform_pair_max_age_sec"
+    default="0.10"
+  />
+  <arg
+    name="apriltag_tag_transform_bootstrap_translation_outlier_m"
+    default="0.03"
+  />
+  <arg
+    name="apriltag_tag_transform_bootstrap_rotation_outlier_deg"
+    default="8.0"
+  />
+  <arg name="apriltag_tag_transform_online_alpha" default="0.01" />
+  <arg
+    name="apriltag_tag_transform_max_translation_step_m"
+    default="0.002"
+  />
+  <arg
+    name="apriltag_tag_transform_max_rotation_step_deg"
+    default="0.25"
+  />
+  <arg
+    name="apriltag_tag_pair_baseline_orientation_weight"
+    default="0.0"
+  />
+  <arg name="apriltag_debug_axis_length_m" default="0.06" />
+  <arg name="apriltag_publish_fusion_pose" default="true" />
+  <arg name="apriltag_publish_tf" default="true" />
+  <arg name="apriltag_max_detection_rate_hz" default="20.0" />
+  <arg name="apriltag_fusion_publish_rate_hz" default="30.0" />
+  <arg name="apriltag_max_observation_age_sec" default="0.15" />
+  <arg name="apriltag_sync_tolerance_sec" default="0.05" />
+  <arg name="apriltag_min_marker_area_px2" default="64.0" />
+  <arg name="apriltag_max_reprojection_rmse_px" default="3.0" />
+  <arg name="apriltag_max_translation_disagreement_m" default="0.25" />
+  <arg name="apriltag_max_rotation_disagreement_deg" default="25.0" />
+  <arg name="apriltag_fixed_tag_frame_z_m" default="1.0" />
+  <arg
+    name="apriltag_kalman_position_measurement_std_m"
+    default="0.010"
+  />
+  <arg
+    name="apriltag_kalman_yaw_measurement_std_deg"
+    default="1.5"
+  />
+  <arg
+    name="apriltag_kalman_linear_acceleration_std_mps2"
+    default="1.0"
+  />
+  <arg
+    name="apriltag_kalman_yaw_acceleration_std_degps2"
+    default="90.0"
+  />
+  <arg
+    name="apriltag_kalman_initial_linear_velocity_std_mps"
+    default="1.0"
+  />
+  <arg
+    name="apriltag_kalman_initial_yaw_rate_std_degps"
+    default="90.0"
+  />
+  <arg name="apriltag_kalman_reset_sec" default="0.5" />
+  <arg name="apriltag_dictionary" default="APRILTAG_36h11" />
+  <arg name="apriltag_corner_refinement" default="true" />
+  <arg name="apriltag_camera_frame_convention" default="zed_x_forward" />
   <!-- Options: PERFORMANCE, QUALITY, ULTRA, NEURAL_LIGHT, NEURAL, NEURAL_PLUS -->
-  <arg name="depth_mode" default="NEURAL_LIGHT" />
+  <arg name="depth_mode" default="NEURAL" />
   <arg name="fusion_reference_frame" default="WORLD" />
-  <arg name="fusion_skeleton_smoothing" default="1.0" />
-  <arg name="fusion_minimum_allowed_cameras" default="2" />
+  <arg name="fusion_skeleton_smoothing" default="0.1" />
+  <arg name="fusion_minimum_allowed_cameras" default="1" />
   <arg name="fusion_minimum_allowed_keypoints" default="7" />
+  <!--
+    All configured cameras always participate. Sender tracking bridges brief
+    per-camera occlusions; Fusion performs cross-camera tracking and fitting.
+  -->
   <arg name="sender_tracking_enabled" default="true"/>
   <arg name="fusion_tracking_enabled" default="true"/>
   <arg name="body_fitting_enabled" default="true" />
@@ -57,20 +194,15 @@
 
   <node
     pkg="zed_launcher"
-    exec="zed_body_fusion_node"
-    namespace="zed_fusion"
-    name="zed_body_fusion_node"
+    exec="body_tracking_node"
     output="screen"
   >
     <param name="role" value="$(var role)" />
     <param name="input_mode" value="$(var input_mode)" />
     <param name="stream_address" value="$(var stream_address)" />
-    <param name="left_stream_port" value="$(var left_stream_port)" />
-    <param name="right_stream_port" value="$(var right_stream_port)" />
-    <param name="left_camera_name" value="$(var left_camera_name)" />
-    <param name="right_camera_name" value="$(var right_camera_name)" />
-    <param name="left_serial" value="$(var left_serial)" />
-    <param name="right_serial" value="$(var right_serial)" />
+    <param name="camera_names" value="$(var camera_names)" />
+    <param name="camera_serials" value="$(var camera_serials)" />
+    <param name="stream_ports" value="$(var stream_ports)" />
     <param name="fusion_config_path" value="$(var fusion_config_path)" />
     <param name="body_model" value="$(var body_model)" />
     <param name="body_format" value="$(var body_format)" />
@@ -78,18 +210,50 @@
     <param name="single_body_enabled" value="$(var single_body_enabled)" />
     <param name="single_body_switch_margin" value="$(var single_body_switch_margin)" />
     <param name="single_body_switch_frames" value="$(var single_body_switch_frames)" />
+    <param name="single_body_logical_id" value="$(var single_body_logical_id)" />
+    <param
+      name="single_body_bridge_timeout_sec"
+      value="$(var single_body_bridge_timeout_sec)"
+    />
+    <param
+      name="single_body_bridge_max_speed_mps"
+      value="$(var single_body_bridge_max_speed_mps)"
+    />
+    <param
+      name="camera_body_fallback_enabled"
+      value="$(var camera_body_fallback_enabled)"
+    />
+    <param
+      name="camera_body_fallback_minimum_cameras"
+      value="$(var camera_body_fallback_minimum_cameras)"
+    />
+    <param
+      name="camera_body_fallback_consensus_distance_m"
+      value="$(var camera_body_fallback_consensus_distance_m)"
+    />
+    <param
+      name="fused_body_max_jump_m"
+      value="$(var fused_body_max_jump_m)"
+    />
+    <param
+      name="body_prediction_timeout_sec"
+      value="$(var body_prediction_timeout_sec)"
+    />
     <param name="publish_frame_id" value="$(var publish_frame_id)" />
     <param name="output_topic" value="$(var output_topic)" />
     <param name="camera_resolution" value="$(var camera_resolution)" />
     <param name="camera_fps" value="$(var camera_fps)" />
-    <param name="publish_images" value="$(var publish_images)" />
-    <param name="publish_overlay_images" value="$(var publish_overlay_images)" />
+    <param name="publish_overlay_images" value="$(var debug)" />
     <param name="publish_per_camera_skeletons" value="$(var publish_per_camera_skeletons)" />
     <param name="overlay_min_confidence" value="$(var overlay_min_confidence)" />
     <param name="overlay_max_skeleton_age_sec" value="$(var overlay_max_skeleton_age_sec)" />
     <param name="depth_mode" value="$(var depth_mode)" />
     <param name="fusion_reference_frame" value="$(var fusion_reference_frame)" />
     <param name="fusion_publish_rate_hz" value="$(var fusion_publish_rate_hz)" />
+    <param
+      name="fusion_diagnostics_rate_hz"
+      value="$(var fusion_diagnostics_rate_hz)"
+    />
     <param name="fusion_skeleton_smoothing" value="$(var fusion_skeleton_smoothing)" />
     <param name="fusion_minimum_allowed_cameras" value="$(var fusion_minimum_allowed_cameras)" />
     <param name="fusion_minimum_allowed_keypoints" value="$(var fusion_minimum_allowed_keypoints)" />
@@ -103,6 +267,203 @@
     />
     <param name="sdk_gpu_id" value="$(var sdk_gpu_id)" />
     <param name="sdk_verbose" value="$(var sdk_verbose)" />
+    <param
+      name="enable_apriltag_fusion"
+      value="$(var enable_apriltag_fusion)"
+    />
+    <param name="fusion_frame_id" value="$(var publish_frame_id)" />
+    <param name="front_tag_id" value="$(var apriltag_front_tag_id)" />
+    <param name="back_tag_id" value="$(var apriltag_back_tag_id)" />
+    <param
+      name="front_tag_size_m"
+      value="$(var apriltag_front_tag_size_m)"
+    />
+    <param
+      name="back_tag_size_m"
+      value="$(var apriltag_back_tag_size_m)"
+    />
+    <param name="tag_frame_id" value="$(var apriltag_tag_frame_id)" />
+    <param name="pose_topic" value="$(var apriltag_pose_topic)" />
+    <param
+      name="initial_tag_frame_offset_m"
+      value="$(var apriltag_initial_tag_frame_offset_m)"
+    />
+    <param
+      name="learn_tag_separation"
+      value="$(var apriltag_learn_tag_separation)"
+    />
+    <param
+      name="tag_separation_ema_alpha"
+      value="$(var apriltag_tag_separation_ema_alpha)"
+    />
+    <param
+      name="tag_separation_max_innovation_m"
+      value="$(var apriltag_tag_separation_max_innovation_m)"
+    />
+    <param name="use_depth" value="$(var apriltag_use_depth)" />
+    <param
+      name="depth_inner_margin_ratio"
+      value="$(var apriltag_depth_inner_margin_ratio)"
+    />
+    <param
+      name="depth_min_valid_samples"
+      value="$(var apriltag_depth_min_valid_samples)"
+    />
+    <param
+      name="depth_min_valid_fraction"
+      value="$(var apriltag_depth_min_valid_fraction)"
+    />
+    <param
+      name="depth_plane_inlier_threshold_m"
+      value="$(var apriltag_depth_plane_inlier_threshold_m)"
+    />
+    <param
+      name="depth_plane_max_rmse_m"
+      value="$(var apriltag_depth_plane_max_rmse_m)"
+    />
+    <param
+      name="depth_max_pnp_translation_delta_m"
+      value="$(var apriltag_depth_max_pnp_translation_delta_m)"
+    />
+    <param
+      name="depth_max_pnp_rotation_delta_deg"
+      value="$(var apriltag_depth_max_pnp_rotation_delta_deg)"
+    />
+    <param
+      name="depth_max_size_error_fraction"
+      value="$(var apriltag_depth_max_size_error_fraction)"
+    />
+    <param
+      name="pnp_ambiguity_reprojection_margin_px"
+      value="$(var apriltag_pnp_ambiguity_reprojection_margin_px)"
+    />
+    <param
+      name="pnp_prior_max_age_sec"
+      value="$(var apriltag_pnp_prior_max_age_sec)"
+    />
+    <param
+      name="learn_tag_transform"
+      value="$(var apriltag_learn_tag_transform)"
+    />
+    <param
+      name="tag_transform_bootstrap_duration_sec"
+      value="$(var apriltag_tag_transform_bootstrap_duration_sec)"
+    />
+    <param
+      name="tag_transform_bootstrap_min_samples"
+      value="$(var apriltag_tag_transform_bootstrap_min_samples)"
+    />
+    <param
+      name="tag_transform_pair_max_age_sec"
+      value="$(var apriltag_tag_transform_pair_max_age_sec)"
+    />
+    <param
+      name="tag_transform_bootstrap_translation_outlier_m"
+      value="$(var apriltag_tag_transform_bootstrap_translation_outlier_m)"
+    />
+    <param
+      name="tag_transform_bootstrap_rotation_outlier_deg"
+      value="$(var apriltag_tag_transform_bootstrap_rotation_outlier_deg)"
+    />
+    <param
+      name="tag_transform_online_alpha"
+      value="$(var apriltag_tag_transform_online_alpha)"
+    />
+    <param
+      name="tag_transform_max_translation_step_m"
+      value="$(var apriltag_tag_transform_max_translation_step_m)"
+    />
+    <param
+      name="tag_transform_max_rotation_step_deg"
+      value="$(var apriltag_tag_transform_max_rotation_step_deg)"
+    />
+    <param
+      name="tag_pair_baseline_orientation_weight"
+      value="$(var apriltag_tag_pair_baseline_orientation_weight)"
+    />
+    <param
+      name="publish_fusion_pose"
+      value="$(var apriltag_publish_fusion_pose)"
+    />
+    <param name="publish_tf" value="$(var apriltag_publish_tf)" />
+    <param name="publish_debug_images" value="$(var debug)" />
+    <param
+      name="debug_axis_length_m"
+      value="$(var apriltag_debug_axis_length_m)"
+    />
+    <param
+      name="max_detection_rate_hz"
+      value="$(var apriltag_max_detection_rate_hz)"
+    />
+    <param
+      name="apriltag_fusion_publish_rate_hz"
+      value="$(var apriltag_fusion_publish_rate_hz)"
+    />
+    <param
+      name="max_observation_age_sec"
+      value="$(var apriltag_max_observation_age_sec)"
+    />
+    <param
+      name="sync_tolerance_sec"
+      value="$(var apriltag_sync_tolerance_sec)"
+    />
+    <param
+      name="min_marker_area_px2"
+      value="$(var apriltag_min_marker_area_px2)"
+    />
+    <param
+      name="max_reprojection_rmse_px"
+      value="$(var apriltag_max_reprojection_rmse_px)"
+    />
+    <param
+      name="max_translation_disagreement_m"
+      value="$(var apriltag_max_translation_disagreement_m)"
+    />
+    <param
+      name="max_rotation_disagreement_deg"
+      value="$(var apriltag_max_rotation_disagreement_deg)"
+    />
+    <param
+      name="fixed_tag_frame_z_m"
+      value="$(var apriltag_fixed_tag_frame_z_m)"
+    />
+    <param
+      name="kalman_position_measurement_std_m"
+      value="$(var apriltag_kalman_position_measurement_std_m)"
+    />
+    <param
+      name="kalman_yaw_measurement_std_deg"
+      value="$(var apriltag_kalman_yaw_measurement_std_deg)"
+    />
+    <param
+      name="kalman_linear_acceleration_std_mps2"
+      value="$(var apriltag_kalman_linear_acceleration_std_mps2)"
+    />
+    <param
+      name="kalman_yaw_acceleration_std_degps2"
+      value="$(var apriltag_kalman_yaw_acceleration_std_degps2)"
+    />
+    <param
+      name="kalman_initial_linear_velocity_std_mps"
+      value="$(var apriltag_kalman_initial_linear_velocity_std_mps)"
+    />
+    <param
+      name="kalman_initial_yaw_rate_std_degps"
+      value="$(var apriltag_kalman_initial_yaw_rate_std_degps)"
+    />
+    <param
+      name="kalman_reset_sec"
+      value="$(var apriltag_kalman_reset_sec)"
+    />
+    <param name="dictionary" value="$(var apriltag_dictionary)" />
+    <param
+      name="corner_refinement"
+      value="$(var apriltag_corner_refinement)"
+    />
+    <param
+      name="camera_frame_convention"
+      value="$(var apriltag_camera_frame_convention)"
+    />
   </node>
 
   <node
