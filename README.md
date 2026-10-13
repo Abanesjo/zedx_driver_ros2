@@ -14,9 +14,10 @@ On the ZED Box:
 git clone --recursive https://github.com/Abanesjo/zedx_driver_ros2
 ```
 2. ROS 2 communication uses `rmw_zenoh`. Leave `src/RMW_ZENOH_ROUTER_CONFIG.json5` as it is on the ZED Box
-3. On the `docker/Dockerfile`, ensure the first line is: 
+3. On the `docker/Dockerfile`, set the base image and ROS distro for the machine (see [Base Image](#base-image)). For a Jetson AGX Thor:
 ```
-FROM stereolabs/zed:5.3.0-py-devel-l4t-r36.4
+FROM stereolabs/zed:5.3.0-py-devel-l4t-r38.4
+ARG ROS_DISTRO=jazzy
 ```
 4. Create the docker container
 ```
@@ -47,9 +48,10 @@ On the Networked Workstation:
 git clone --recursive https://github.com/Abanesjo/zedx_driver_ros2
 ```
 2. In `src/RMW_ZENOH_ROUTER_CONFIG.json5`, add the ZED Box router to `connect.endpoints` so the two routers find each other, for example `endpoints: ["tcp/192.168.0.133:7447"]`
-3. On the `docker/Dockerfile`, ensure the first line is: 
+3. On the `docker/Dockerfile`, set the base image and ROS distro for the machine (see [Base Image](#base-image)):
 ```
-FROM stereolabs/zed:5.3-gl-devel-cuda12.8-ubuntu22.04
+FROM stereolabs/zed:5.3-gl-devel-cuda12.8-ubuntu24.04
+ARG ROS_DISTRO=jazzy
 ```
 4. Create the docker container
 ```
@@ -80,6 +82,17 @@ You should see a visualization like below
 ![rviz](docs/rviz.png)
 
 The axes also show the position of the cameras in the world frame. 
+
+## Base Image
+The `FROM` line and the `ROS_DISTRO` argument at the top of `docker/Dockerfile` must match the machine. The Ubuntu version of the image decides which ROS distro can be installed.
+
+| Machine | `FROM` | `ROS_DISTRO` |
+|---|---|---|
+| Jetson AGX Thor (JetPack 7) | `stereolabs/zed:5.3.0-py-devel-l4t-r38.4` | `jazzy` |
+| Workstation with an RTX GPU | `stereolabs/zed:5.3-gl-devel-cuda12.8-ubuntu24.04` | `jazzy` |
+| JetPack 6 Jetson / ZED Box | `stereolabs/zed:5.3.0-py-devel-l4t-r36.4` | `humble` |
+
+All machines that exchange ROS topics must use the same distro: `rmw_zenoh` does not carry messages between Humble and Jazzy. The camera stream between `server.launch.xml` and `body_tracking.launch.xml` is not a ROS topic and is not affected.
 
 ## Camera Type
 Both `server.launch.xml` and `body_tracking.launch.xml` take a `camera_type` argument. Use the same value on both.

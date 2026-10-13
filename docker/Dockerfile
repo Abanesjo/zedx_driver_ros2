@@ -1,11 +1,17 @@
-FROM stereolabs/zed:5.3.0-py-devel-l4t-r36.4
-# FROM stereolabs/zed:5.3-gl-devel-cuda12.8-ubuntu22.04
+# Base image, one per machine type. The Ubuntu version of the image decides the
+# ROS distro: 24.04 -> jazzy, 22.04 -> humble.
+#   Jetson AGX Thor (L4T r38.4):  stereolabs/zed:5.3.0-py-devel-l4t-r38.4            jazzy
+#   Workstation (RTX GPU):        stereolabs/zed:5.3-gl-devel-cuda12.8-ubuntu24.04   jazzy
+#   JetPack 6 Jetson / ZED Box:   stereolabs/zed:5.3.0-py-devel-l4t-r36.4            humble
+FROM stereolabs/zed:5.3.0-py-devel-l4t-r38.4
+
+ARG ROS_DISTRO=jazzy
 
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PIP_BREAK_SYSTEM_PACKAGES=1
 ENV PIP_ROOT_USER_ACTION=ignore
-ENV ROS_DISTRO=humble
+ENV ROS_DISTRO=${ROS_DISTRO}
 
 RUN apt update && apt upgrade -y
 
@@ -25,9 +31,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # ROS 2 + dependencies
 RUN apt-get install -y --no-install-recommends \
-    ros-humble-desktop \
-    ros-humble-rmw-zenoh-cpp \
-    ros-humble-rosidl-generator-dds-idl \
+    ros-${ROS_DISTRO}-desktop \
+    ros-${ROS_DISTRO}-rmw-zenoh-cpp \
+    ros-${ROS_DISTRO}-rosidl-generator-dds-idl \
     python3-colcon-common-extensions \
     python3-rosdep \
     python3-vcstool \
@@ -50,7 +56,7 @@ RUN rosdep init
 RUN rosdep update
 RUN rosdep install --from-paths src --ignore-src -r -y --skip-keys scout_description
 
-RUN source /opt/ros/humble/setup.bash && \
+RUN source /opt/ros/${ROS_DISTRO}/setup.bash && \
     colcon build --symlink-install --parallel-workers $(( $(nproc) / 2 )) \
     --cmake-args \
     -DCMAKE_BUILD_TYPE=Release \

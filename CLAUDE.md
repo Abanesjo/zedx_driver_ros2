@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-ROS 2 Humble (C++17, ament_cmake) packages that fuse body tracking from two ZED cameras (ZED X over GMSL2, or ZED Mini over USB) and turn the fused skeleton into upper-body joint targets and collision capsules for a Unitree G1 humanoid. Compute is normally split across two machines: a ZED Box (Jetson) that only grabs and H.264-streams the cameras, and a workstation with an RTX GPU that runs body tracking and fusion on the streams.
+ROS 2 Jazzy (C++17, ament_cmake) packages that fuse body tracking from two ZED cameras (ZED X over GMSL2, or ZED Mini over USB) and turn the fused skeleton into upper-body joint targets and collision capsules for a Unitree G1 humanoid. Compute is normally split across two machines: a ZED Box (Jetson) that only grabs and H.264-streams the cameras, and a workstation with an RTX GPU that runs body tracking and fusion on the streams.
 
 ## Build and run
 
@@ -15,6 +15,8 @@ git submodule update --init --recursive   # dependencies/ are submodules
 cd docker && docker compose up            # builds image, then entrypoint runs rosdep + colcon build
 docker exec -it zedx_driver_ros2 bash     # .bashrc already sources ROS + the workspace
 ```
+
+The container runs with `pid: host`, so `pkill -f` inside it also matches host processes; use specific patterns.
 
 Inside the container the workspace is `/workspace/ros2_ws`. `../src` is bind-mounted at `src/zedx_driver`, so edits on the host are live; rebuild with:
 
@@ -34,7 +36,7 @@ ros2 launch zed_launcher body_tracking.launch.xml debug:=true rviz:=true  # fusi
 ros2 launch human_mapping human_mapping.launch.xml                      # joint targets + colliders
 ```
 
-The middleware is `rmw_zenoh` (CycloneDDS is no longer installed). Nothing starts the Zenoh router: run `ros2 run rmw_zenoh_cpp rmw_zenohd` in its own shell first, or nodes will not discover each other. `rmw_zenoh` on Humble does not exchange messages with Jazzy or newer nodes.
+The middleware is `rmw_zenoh` (CycloneDDS is no longer installed). Nothing starts the Zenoh router: run `ros2 run rmw_zenoh_cpp rmw_zenohd` in its own shell first, or nodes will not discover each other. `rmw_zenoh` does not exchange messages between Humble and Jazzy, so every machine sharing topics must be on the same distro (the camera stream is not a ROS topic and is unaffected). With `rmw_zenoh`, `ros2 topic hz` / `echo` can ignore SIGTERM, so wrap them in `timeout -s KILL` in scripts.
 
 There are no tests and no lint configuration in this repo.
 
@@ -42,7 +44,7 @@ There are no tests and no lint configuration in this repo.
 
 Three things differ between machines and are edited in place, so expect them to show up as local modifications. Do not "fix" or commit them without being asked:
 
-- `docker/Dockerfile` line 1: `stereolabs/zed:5.3.0-py-devel-l4t-r36.4` on the Jetson, `stereolabs/zed:5.3-gl-devel-cuda12.8-ubuntu22.04` on the workstation (the other is kept as a comment). On the AGX Thor host (L4T r38.4) the Jetson image builds, runs ROS and opens cameras, but its ZED SDK cannot do inference or hardware encoding there: TensorRT model optimisation fails with "no kernel image is available for execution on the device" and the stream encoder cannot open `/dev/v4l2-nvenc`. Body tracking and the stream server therefore do not work on the Thor with this image. The matching r38.4 ZED images are Ubuntu 24.04, which has no Humble apt packages.
+- `docker/Dockerfile`: the `FROM` line and `ARG ROS_DISTRO` at the top. The image's Ubuntu version decides the distro: `stereolabs/zed:5.3.0-py-devel-l4t-r38.4` (Jetson AGX Thor) and `stereolabs/zed:5.3-gl-devel-cuda12.8-ubuntu24.04` (workstation) are Ubuntu 24.04 and use `jazzy`; `stereolabs/zed:5.3.0-py-devel-l4t-r36.4` (JetPack 6 Jetson / ZED Box) is Ubuntu 22.04 and needs `humble`. On the Thor only the r38.4 image works: with the r36.4 image the SDK can open cameras but TensorRT inference and hardware encoding both fail.
 - `src/RMW_ZENOH_ROUTER_CONFIG.json5`: on one machine of a pair, `connect.endpoints` must list the other machine's router (`tcp/<ip>:7447`). It is loaded via `ZENOH_ROUTER_CONFIG_URI`, set in the `.bashrc` block that `docker/entrypoint.sh` writes.
 - `ZED_BOX_IP`, also exported from that `.bashrc` block in `docker/entrypoint.sh`. It is the default `stream_address` for `body_tracking.launch.xml`. The block is only appended once per container, so changing it means recreating the container or editing `~/.bashrc` inside it.
 
