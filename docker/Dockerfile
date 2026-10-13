@@ -26,7 +26,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # ROS 2 + dependencies
 RUN apt-get install -y --no-install-recommends \
     ros-humble-desktop \
-    ros-humble-rmw-cyclonedds-cpp \
+    ros-humble-rmw-zenoh-cpp \
     ros-humble-rosidl-generator-dds-idl \
     python3-colcon-common-extensions \
     python3-rosdep \

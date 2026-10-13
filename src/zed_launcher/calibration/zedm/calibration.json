@@ -1,0 +1,24 @@
+{
+    "10026981": {
+        "FusionConfiguration": {
+            "communication_parameters": {
+                "CommunicationParameters": {
+                    "communication_type": "INTRA PROCESS",
+                    "ip_add": "",
+                    "ip_port": 0
+                }
+            },
+            "input_type": {
+                "InputType": {
+                    "input_type_conf": "10026981",
+                    "input_type_conf_right": "0",
+                    "input_type_input": "AUTO",
+                    "input_virtual_serial_number": 0
+                }
+            },
+            "override_gravity": false,
+            "pose": "1.000000 0.000000 0.000000 0.000000 0.000000 1.000000 0.000000 0.000000 0.000000 0.000000 1.000000 0.000000 0.000000 0.000000 0.000000 1.000000",
+            "serial_number": 10026981
+        }
+    }
+}

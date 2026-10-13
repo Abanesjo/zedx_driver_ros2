@@ -25,11 +25,10 @@ if ! grep -qxF "#Entrypoint Setup" ~/.bashrc; then
 #Entrypoint Setup
 source /opt/ros/humble/setup.bash
 source /workspace/ros2_ws/install/setup.bash
-export RMW_IMPLEMENTATION="rmw_cyclonedds_cpp"
-export CYCLONEDDS_URI=file:///workspace/ros2_ws/src/zedx_driver/cyclonedds.xml
+export RMW_IMPLEMENTATION="rmw_zenoh_cpp"
+export ZENOH_ROUTER_CONFIG_URI=/workspace/ros2_ws/src/zedx_driver/RMW_ZENOH_ROUTER_CONFIG.json5
 alias mujoco='export LD_LIBRARY_PATH=/usr/local/lib:/usr/lib/x86_64-linux-gnu'
 export XLA_PYTHON_CLIENT_MEM_FRACTION=".50"
-export CAM_MODEL="zedx"
 export ZED_BOX_IP="192.168.0.133"
 EOF
 fi

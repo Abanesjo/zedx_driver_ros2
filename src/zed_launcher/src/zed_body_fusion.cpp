@@ -215,10 +215,19 @@ ZedBodyFusionNode::ZedBodyFusionNode(const rclcpp::NodeOptions &options)
               fusion_config_path_.c_str());
   fusion_configs_ = sl::readFusionConfigurationFile(
       fusion_config_path_, kRosCoordinateSystem, kRosUnits);
-  if (fusion_configs_.size() != 2) {
+  if (fusion_configs_.empty() || fusion_configs_.size() > 2) {
     throw std::runtime_error(
-        "Fusion configuration must contain exactly two cameras, found " +
+        "Fusion configuration must contain one or two cameras, found " +
         std::to_string(fusion_configs_.size()));
+  }
+
+  const int camera_count = static_cast<int>(fusion_configs_.size());
+  if (fusion_minimum_allowed_cameras_ > camera_count) {
+    RCLCPP_WARN(get_logger(),
+                "fusion_minimum_allowed_cameras (%d) exceeds the %d camera(s) "
+                "in the Fusion configuration; using %d",
+                fusion_minimum_allowed_cameras_, camera_count, camera_count);
+    fusion_minimum_allowed_cameras_ = camera_count;
   }
 
   configureRuntimeParameters();
