@@ -18,6 +18,10 @@
     An unsupported frame rate is not an error: the SDK replaces it with a valid
     one and the wrapper only logs a warning.
 
+    Defaults: zedx streams HD1080 at 60 fps. zedm streams VGA at 100 fps, because
+    on the Jetson AGX Thor a ZED Mini at HD720 only reaches 25 to 45 Hz of body
+    tracking, while VGA keeps the fused skeleton at 60 Hz.
+
     num_cameras is 1 or 2. With 1 only the left camera is started. Its default
     follows the current rigs: two ZED X, one ZED Mini.
   -->
@@ -37,9 +41,12 @@
 
   <arg
     name="grab_resolution"
-    default="$(eval '\'HD1080\' if \'$(var camera_type)\' == \'zedx\' else \'HD720\'')"
+    default="$(eval '\'HD1080\' if \'$(var camera_type)\' == \'zedx\' else \'VGA\'')"
   />
-  <arg name="grab_frame_rate" default="60" />
+  <arg
+    name="grab_frame_rate"
+    default="$(eval '\'60\' if \'$(var camera_type)\' == \'zedx\' else \'100\'')"
+  />
   <arg name="stream_target_framerate" default="0" />
 
   <arg name="left_camera_name" default="zed_left" />

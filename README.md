@@ -100,9 +100,11 @@ Both `server.launch.xml` and `body_tracking.launch.xml` take a `camera_type` arg
 | `camera_type` | Cameras | Default stream mode |
 |---|---|---|
 | `zedx` (default) | ZED X (GMSL2) | HD1080 at 60 fps |
-| `zedm` | ZED Mini (USB) | HD720 at 60 fps |
+| `zedm` | ZED Mini (USB) | VGA at 100 fps |
 
-A ZED Mini cannot do HD1080 at 60 fps. The valid resolution and frame rate combinations for each type are listed at the top of `src/zed_launcher/launch/server.launch.xml`; override them with `grab_resolution:=` and `grab_frame_rate:=`.
+The valid resolution and frame rate combinations for each type are listed at the top of `src/zed_launcher/launch/server.launch.xml`; override them with `grab_resolution:=` and `grab_frame_rate:=`.
+
+For `zedm`, body tracking also defaults to `depth_mode:=NEURAL` and `body_model:=HUMAN_BODY_MEDIUM`. Measured on a Jetson AGX Thor with one ZED Mini, this is the heaviest combination that keeps the fused skeleton at 60 Hz: HD720 only reaches 25 to 45 Hz, `HUMAN_BODY_ACCURATE` drops below 60 Hz, and `HUMAN_BODY_FAST` often loses the person at VGA.
 
 ### Number of cameras
 The `zedm` setup currently uses a single ZED Mini, so `num_cameras` in `server.launch.xml` defaults to 1 for `zedm` (2 for `zedx`). With one camera only the left camera is started:

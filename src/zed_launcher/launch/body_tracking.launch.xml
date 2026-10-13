@@ -8,7 +8,11 @@
   </arg>
 
   <arg name="debug" default="false" />
-  <arg name="camera_fps" default="60" />
+  <!-- Only used with input_mode:=live, like camera_resolution below. -->
+  <arg
+    name="camera_fps"
+    default="$(eval '\'60\' if \'$(var camera_type)\' == \'zedx\' else \'100\'')"
+  />
   <arg name="fusion_publish_rate_hz" default="60.0" />
 
   <arg name="role" default="local" />
@@ -33,7 +37,12 @@
     default="$(find-pkg-share zed_launcher)/calibration/$(var camera_type)/calibration.json"
   />
   <!-- Options: HUMAN_BODY_FAST, HUMAN_BODY_MEDIUM, HUMAN_BODY_ACCURATE -->
-  <arg name="body_model" default="HUMAN_BODY_FAST" />
+  <!-- zedm runs at VGA, where FAST often loses the person at the default
+       confidence threshold and ACCURATE drops below 60 Hz. -->
+  <arg
+    name="body_model"
+    default="$(eval '\'HUMAN_BODY_FAST\' if \'$(var camera_type)\' == \'zedx\' else \'HUMAN_BODY_MEDIUM\'')"
+  />
   <!-- Options: BODY_18, BODY_34, BODY_38 -->
   <arg name="body_format" default="BODY_38" />
   <!-- confidence threshold for body tracking -->
@@ -49,7 +58,7 @@
   <!-- Only used with input_mode:=live; a stream keeps the sender's resolution. -->
   <arg
     name="camera_resolution"
-    default="$(eval '\'HD1080\' if \'$(var camera_type)\' == \'zedx\' else \'HD720\'')"
+    default="$(eval '\'HD1080\' if \'$(var camera_type)\' == \'zedx\' else \'VGA\'')"
   />
   <arg name="publish_images" default="false" />
   <arg name="publish_overlay_images" default="$(var debug)" />
@@ -57,7 +66,12 @@
   <arg name="overlay_min_confidence" default="$(var confidence_threshold)" />
   <arg name="overlay_max_skeleton_age_sec" default="0.5" />
   <!-- Options: PERFORMANCE, QUALITY, ULTRA, NEURAL_LIGHT, NEURAL, NEURAL_PLUS -->
-  <arg name="depth_mode" default="NEURAL_LIGHT" />
+  <!-- zedm: NEURAL is the heaviest mode that keeps 60 Hz at VGA with headroom.
+       NEURAL_PLUS has none, and aborts when the input is a stream. -->
+  <arg
+    name="depth_mode"
+    default="$(eval '\'NEURAL_LIGHT\' if \'$(var camera_type)\' == \'zedx\' else \'NEURAL\'')"
+  />
   <arg name="fusion_reference_frame" default="WORLD" />
   <arg name="fusion_skeleton_smoothing" default="1.0" />
   <!-- lowered automatically to the number of cameras in the calibration file -->
