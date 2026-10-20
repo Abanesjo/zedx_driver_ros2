@@ -1,6 +1,6 @@
 <launch>
   <arg name="input_skeleton_topic" default="/zed_fusion/body_trk/skeletons"/>
-  <arg name="publish_rate_hz" default="30.0"/>
+  <arg name="publish_rate_hz" default="60.0"/>
   <arg name="joint_command_topic" default="/human/joint_commands"/>
   <arg name="body_collider_topic" default="/human/body_colliders"/>
   <arg name="collider_topic" default="/human/colliders"/>
@@ -9,7 +9,7 @@
   <arg name="hand_collider_topic" default="/human/hand_colliders"/>
   <arg name="publish_collider_markers" default="true"/>
   <arg name="collider_markers_topic" default="/human/collider_markers"/>
-  <arg name="collider_marker_rate" default="30.0"/>
+  <arg name="collider_marker_rate" default="60.0"/>
   <arg name="collision_geometry" default="capsules"/>
   <arg name="sphere_interpolation_level" default="0"/>
   <arg name="sphere_radius_gain" default="1.0"/>

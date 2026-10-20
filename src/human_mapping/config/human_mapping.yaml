@@ -5,7 +5,7 @@ human_mapping_node:
     collider_topic: "/human/body_colliders"
     fallback_frame_id: "fusion_world"
 
-    publish_rate_hz: 30.0
+    publish_rate_hz: 60.0
     stale_timeout_sec: 1.0
     min_confidence: 30.0
     # BODY_18 and BODY_34 use the same anatomical capsule segments. Joint
@@ -108,7 +108,7 @@ human_collider_merge_node:
     output_collider_topic: "/human/colliders"
     fallback_frame_id: "fusion_world"
     include_hand_colliders: true
-    publish_rate_hz: 30.0
+    publish_rate_hz: 60.0
     body_stale_timeout_sec: 1.0
     hand_stale_timeout_sec: 1.0
 

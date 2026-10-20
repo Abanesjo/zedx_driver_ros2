@@ -3,7 +3,7 @@
     Body tracking with two ZED Minis plugged into this machine. No stream server:
     the fusion node opens both cameras directly (input_mode live), by the serials
     in the calibration file. AprilTag fusion is off. Every other
-    body_tracking.launch.xml argument (debug, rviz, confidence_threshold, ...)
+    body_tracking.launch.xml argument (rviz, confidence_threshold, ...)
     can still be passed on the command line.
 
     Valid camera_resolution / camera_fps combinations (resolution is per eye):
@@ -12,15 +12,21 @@
       HD720   1280x720    60, 30, 15 fps
       VGA      672x376   100, 60, 30, 15 fps
 
-    On the Jetson AGX Thor with one ZED Mini, HD720 only reaches 25 to 45 Hz of
-    fused skeleton. HUMAN_BODY_FAST can lose the person at VGA; lower
-    confidence_threshold if it does.
+    The defaults held 60 Hz of fused skeleton with two ZED Minis on the RTX 5080
+    laptop (GPU held at about 840 MHz by thermal slowdown). Measured there at
+    VGA@100: FAST + BODY_38 + fitting + NEURAL_LIGHT 59.7 Hz, MEDIUM + BODY_38 +
+    fitting 49.5 Hz, MEDIUM + BODY_34 + fitting + NEURAL 38 Hz, ACCURATE +
+    BODY_34 + fitting + NEURAL_PLUS 22.5 Hz. HD720@60 and HD1080@30 drop frames
+    on the current USB cables.
 
     human_mapping computes joint angles only from BODY_38. With BODY_18 it
     publishes colliders and holds the joint targets at q_home.
   -->
+  <!-- Publishes a skeleton overlay image and the raw skeletons per camera. -->
+  <arg name="debug" default="false" />
   <arg name="camera_resolution" default="VGA" />
   <arg name="camera_fps" default="100" />
+  <!-- Calling Fusion faster than 60 Hz lowered the output rate in testing. -->
   <arg name="fusion_publish_rate_hz" default="60.0" />
   <!-- Must match the serials in the calibration file. stream_ports is unused in
        live mode but must have one entry per camera. -->
@@ -31,13 +37,16 @@
     name="fusion_config_path"
     default="$(find-pkg-share zed_launcher)/calibration/zedm/calibration.json"
   />
-  <arg name="body_model" default="HUMAN_BODY_FAST" />
+  <arg name="body_model" default="HUMAN_BODY_MEDIUM" />
   <arg name="body_format" default="BODY_18" />
-  <arg name="depth_mode" default="NEURAL" />
+  <!-- With fitting on, Fusion turns BODY_18 into BODY_34 output. -->
+  <arg name="body_fitting_enabled" default="false" />
+  <arg name="depth_mode" default="NEURAL_LIGHT" />
 
   <include file="$(find-pkg-share zed_launcher)/launch/body_tracking.launch.xml">
     <arg name="input_mode" value="live" />
     <arg name="enable_apriltag_fusion" value="false" />
+    <arg name="debug" value="$(var debug)" />
     <arg name="camera_resolution" value="$(var camera_resolution)" />
     <arg name="camera_fps" value="$(var camera_fps)" />
     <arg name="fusion_publish_rate_hz" value="$(var fusion_publish_rate_hz)" />
@@ -47,6 +56,7 @@
     <arg name="fusion_config_path" value="$(var fusion_config_path)" />
     <arg name="body_model" value="$(var body_model)" />
     <arg name="body_format" value="$(var body_format)" />
+    <arg name="body_fitting_enabled" value="$(var body_fitting_enabled)" />
     <arg name="depth_mode" value="$(var depth_mode)" />
   </include>
 </launch>
