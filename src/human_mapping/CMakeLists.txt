@@ -10,6 +10,7 @@ find_package(geometry_msgs REQUIRED)
 find_package(g1_cbf_msg REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(sensor_msgs REQUIRED)
+find_package(std_msgs REQUIRED)
 find_package(visualization_msgs REQUIRED)
 find_package(zed_msgs REQUIRED)
 
@@ -21,11 +22,27 @@ add_executable(human_collider_viz_node
   src/human_collider_viz_node.cpp
 )
 
+add_executable(human_collider_merge_node
+  src/human_collider_merge_node.cpp
+)
+
+add_executable(zed_hand_mapping_node
+  src/zed_hand_mapping_node.cpp
+)
+
 target_include_directories(human_mapping_node PRIVATE
   include
 )
 
 target_include_directories(human_collider_viz_node PRIVATE
+  include
+)
+
+target_include_directories(human_collider_merge_node PRIVATE
+  include
+)
+
+target_include_directories(zed_hand_mapping_node PRIVATE
   include
 )
 
@@ -45,10 +62,25 @@ ament_target_dependencies(human_collider_viz_node
   visualization_msgs
 )
 
+ament_target_dependencies(human_collider_merge_node
+  g1_cbf_msg
+  rclcpp
+)
+
+ament_target_dependencies(zed_hand_mapping_node
+  geometry_msgs
+  g1_cbf_msg
+  rclcpp
+  std_msgs
+  zed_msgs
+)
+
 install(
   TARGETS
     human_mapping_node
     human_collider_viz_node
+    human_collider_merge_node
+    zed_hand_mapping_node
   DESTINATION lib/${PROJECT_NAME}
 )
 
@@ -61,5 +93,25 @@ install(
   DIRECTORY include/
   DESTINATION include
 )
+
+if(BUILD_TESTING)
+  find_package(ament_cmake_gtest REQUIRED)
+
+  ament_add_gtest(test_human_mapping
+    test/test_human_mapping.cpp
+    src/human_mapping.cpp
+  )
+  target_include_directories(test_human_mapping PRIVATE
+    include
+  )
+  ament_target_dependencies(test_human_mapping
+    builtin_interfaces
+    geometry_msgs
+    g1_cbf_msg
+    rclcpp
+    sensor_msgs
+    zed_msgs
+  )
+endif()
 
 ament_package()

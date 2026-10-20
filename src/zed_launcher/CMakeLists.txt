@@ -3,6 +3,25 @@ project(zed_launcher)
 
 find_package(ament_cmake REQUIRED)
 find_package(OpenCV REQUIRED)
+if(OpenCV_VERSION VERSION_LESS "4.7.0")
+  set(ZED_LAUNCHER_ARUCO_COMPONENT aruco)
+  set(ZED_LAUNCHER_ARUCO_TARGET opencv_aruco)
+  set(ZED_LAUNCHER_ARUCO_API "legacy aruco module")
+else()
+  set(ZED_LAUNCHER_ARUCO_COMPONENT objdetect)
+  set(ZED_LAUNCHER_ARUCO_TARGET opencv_objdetect)
+  set(ZED_LAUNCHER_ARUCO_API "objdetect ArucoDetector")
+endif()
+find_package(OpenCV REQUIRED COMPONENTS
+  core
+  imgproc
+  calib3d
+  ${ZED_LAUNCHER_ARUCO_COMPONENT}
+)
+message(STATUS
+  "zed_launcher: OpenCV ${OpenCV_VERSION}, using ${ZED_LAUNCHER_ARUCO_API}"
+)
+find_package(diagnostic_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(sensor_msgs REQUIRED)
@@ -21,6 +40,12 @@ install(
 install(
   DIRECTORY include/
   DESTINATION include
+)
+
+install(
+  PROGRAMS scripts/generate_apriltag_prints.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME generate_apriltag_prints
 )
 
 # ZED Body Fusion
@@ -43,6 +68,7 @@ target_link_libraries(zed_body_fusion_node
 )
 
 ament_target_dependencies(zed_body_fusion_node
+  diagnostic_msgs
   geometry_msgs
   rclcpp
   sensor_msgs
@@ -81,11 +107,191 @@ ament_target_dependencies(zed_skeleton_overlay_node
   zed_msgs
 )
 
+# AprilTag pose in ZED fusion frame
+
+add_executable(apriltag_fusion_node
+  src/apriltag_fusion_node.cpp
+  src/apriltag_fusion.cpp
+)
+
+target_compile_features(apriltag_fusion_node PRIVATE cxx_std_17)
+
+target_include_directories(apriltag_fusion_node PRIVATE
+  include
+  ${OpenCV_INCLUDE_DIRS}
+)
+
+target_link_libraries(apriltag_fusion_node
+  opencv_core
+  opencv_imgproc
+  opencv_calib3d
+  ${ZED_LAUNCHER_ARUCO_TARGET}
+)
+
+ament_target_dependencies(apriltag_fusion_node
+  geometry_msgs
+  rclcpp
+  sensor_msgs
+  tf2
+  tf2_ros
+)
+
+# Combined body tracking and AprilTag fusion
+
+add_executable(body_tracking_node
+  src/body_tracking_node.cpp
+  src/zed_body_fusion.cpp
+  src/apriltag_fusion.cpp
+  src/async_apriltag_processor.cpp
+)
+
+target_compile_features(body_tracking_node PRIVATE cxx_std_17)
+
+target_include_directories(body_tracking_node PRIVATE
+  include
+  ${ZED_INCLUDE_DIRS}
+  ${OpenCV_INCLUDE_DIRS}
+  ${CUDAToolkit_INCLUDE_DIRS}
+)
+
+target_link_libraries(body_tracking_node
+  ${ZED_LIBRARIES}
+  ${OpenCV_LIBRARIES}
+  CUDA::cudart
+  ${ZED_LAUNCHER_ARUCO_TARGET}
+)
+
+ament_target_dependencies(body_tracking_node
+  diagnostic_msgs
+  geometry_msgs
+  rclcpp
+  sensor_msgs
+  tf2
+  tf2_ros
+  zed_msgs
+)
+
 install(
   TARGETS
+    apriltag_fusion_node
+    body_tracking_node
     zed_body_fusion_node
     zed_skeleton_overlay_node
   DESTINATION lib/${PROJECT_NAME}
 )
+
+if(BUILD_TESTING)
+  find_package(ament_cmake_gtest REQUIRED)
+  find_package(ament_cmake_pytest REQUIRED)
+
+  ament_add_gtest(
+    apriltag_fusion_test
+    test/test_apriltag_fusion.cpp
+    src/apriltag_fusion.cpp
+  )
+  target_compile_features(apriltag_fusion_test PRIVATE cxx_std_17)
+  target_include_directories(apriltag_fusion_test PRIVATE
+    include
+    ${OpenCV_INCLUDE_DIRS}
+  )
+  target_link_libraries(apriltag_fusion_test
+    opencv_core
+    opencv_imgproc
+    opencv_calib3d
+    ${ZED_LAUNCHER_ARUCO_TARGET}
+  )
+  ament_target_dependencies(apriltag_fusion_test
+    geometry_msgs
+    rclcpp
+    sensor_msgs
+    tf2
+    tf2_ros
+  )
+
+  ament_add_gtest(
+    async_apriltag_processor_test
+    test/test_async_apriltag_processor.cpp
+    src/async_apriltag_processor.cpp
+    src/apriltag_fusion.cpp
+  )
+  target_compile_features(async_apriltag_processor_test PRIVATE cxx_std_17)
+  target_include_directories(async_apriltag_processor_test PRIVATE
+    include
+    ${OpenCV_INCLUDE_DIRS}
+  )
+  target_link_libraries(async_apriltag_processor_test
+    opencv_core
+    opencv_imgproc
+    opencv_calib3d
+    ${ZED_LAUNCHER_ARUCO_TARGET}
+  )
+  ament_target_dependencies(async_apriltag_processor_test
+    geometry_msgs
+    rclcpp
+    sensor_msgs
+    tf2
+    tf2_ros
+  )
+
+  ament_add_gtest(
+    body_format_utils_test
+    test/test_body_format_utils.cpp
+  )
+  target_compile_features(body_format_utils_test PRIVATE cxx_std_17)
+  target_include_directories(body_format_utils_test PRIVATE
+    include
+    ${ZED_INCLUDE_DIRS}
+    ${CUDAToolkit_INCLUDE_DIRS}
+  )
+  target_link_libraries(body_format_utils_test
+    ${ZED_LIBRARIES}
+    CUDA::cudart
+  )
+
+  ament_add_gtest(
+    single_body_continuity_test
+    test/test_single_body_continuity.cpp
+  )
+  target_compile_features(single_body_continuity_test PRIVATE cxx_std_17)
+  target_include_directories(single_body_continuity_test PRIVATE
+    include
+  )
+  ament_target_dependencies(single_body_continuity_test
+    zed_msgs
+  )
+
+  ament_add_gtest(
+    camera_body_consensus_test
+    test/test_camera_body_consensus.cpp
+  )
+  target_compile_features(camera_body_consensus_test PRIVATE cxx_std_17)
+  target_include_directories(camera_body_consensus_test PRIVATE
+    include
+  )
+  ament_target_dependencies(camera_body_consensus_test
+    zed_msgs
+  )
+
+  ament_add_pytest_test(
+    generate_apriltag_prints_test
+    test/test_generate_apriltag_prints.py
+    APPEND_ENV PYTHONDONTWRITEBYTECODE=1
+    TIMEOUT 60
+  )
+
+  ament_add_pytest_test(
+    body_tracking_launch_contract_test
+    test/test_body_tracking_launch_contract.py
+    APPEND_ENV PYTHONDONTWRITEBYTECODE=1
+    TIMEOUT 60
+  )
+
+  ament_add_pytest_test(
+    single_camera_launch_test
+    test/test_single_camera_launch.py
+    APPEND_ENV PYTHONDONTWRITEBYTECODE=1
+    TIMEOUT 60
+  )
+endif()
 
 ament_package()

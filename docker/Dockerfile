@@ -30,7 +30,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get update
 
 # ROS 2 + dependencies
-RUN apt-get install -y --no-install-recommends \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     ros-${ROS_DISTRO}-desktop \
     ros-${ROS_DISTRO}-rmw-zenoh-cpp \
     ros-${ROS_DISTRO}-rosidl-generator-dds-idl \
@@ -40,6 +40,8 @@ RUN apt-get install -y --no-install-recommends \
     python3-pip \
     libyaml-cpp-dev \
     libeigen3-dev \
+    libopencv-dev \
+    nlohmann-json3-dev \
     libboost-all-dev \
     libspdlog-dev \
     libfmt-dev \

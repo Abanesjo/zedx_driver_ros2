@@ -1,0 +1,84 @@
+Panels:
+  - Class: rviz_common/Displays
+    Name: Displays
+Visualization Manager:
+  Class: ""
+  Displays:
+    - Alpha: 0.5
+      Cell Size: 1
+      Class: rviz_default_plugins/Grid
+      Color: 160; 160; 164
+      Enabled: true
+      Name: Grid
+      Plane: XY
+      Plane Cell Count: 10
+      Reference Frame: <Fixed Frame>
+      Value: true
+    - Class: rviz_default_plugins/Axes
+      Enabled: true
+      Length: 0.5
+      Name: Fusion World
+      Radius: 0.10000000149011612
+      Reference Frame: fusion_world
+      Value: true
+    - Class: rviz_plugin_zed_od/ZedOdDisplay
+      Enabled: true
+      Joint Radius: 0.10000000149011612
+      Label Scale: 5
+      Link Size: 0.05000000074505806
+      Name: Fused Body
+      Show Bounding Boxes: true
+      Show Labels: true
+      Show Skeletons: true
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        Filter size: 10
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+        Value: /zed_fusion/body_trk/skeletons
+      Transparency: 0.25
+      Value: true
+    - Class: rviz_default_plugins/Image
+      Enabled: true
+      Max Value: 1
+      Median window: 5
+      Min Value: 0
+      Name: Combined Overlay
+      Normalize Range: true
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+        Value: /zed_fusion/zed_node/rgb/color/rect/body_tracking_overlay
+      Value: true
+  Enabled: true
+  Global Options:
+    Background Color: 48; 48; 48
+    Fixed Frame: fusion_world
+    Frame Rate: 30
+  Name: root
+  Transformation:
+    Current:
+      Class: rviz_default_plugins/TF
+  Value: true
+  Views:
+    Current:
+      Class: rviz_default_plugins/Orbit
+      Distance: 8
+      Focal Point:
+        X: 0
+        Y: 0
+        Z: 1
+      Name: Current View
+      Pitch: 0.4
+      Target Frame: <Fixed Frame>
+      Value: Orbit (rviz)
+      Yaw: 0.8
+    Saved: ~
+Window Geometry:
+  Displays:
+    collapsed: false
+  Height: 900
+  Width: 1440

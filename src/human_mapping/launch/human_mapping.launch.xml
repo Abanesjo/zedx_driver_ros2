@@ -1,10 +1,15 @@
 <launch>
   <arg name="input_skeleton_topic" default="/zed_fusion/body_trk/skeletons"/>
-  <arg name="joint_command_topic" default="/upper_body_targets_unsafe"/>
+  <arg name="publish_rate_hz" default="30.0"/>
+  <arg name="joint_command_topic" default="/human/joint_commands"/>
+  <arg name="body_collider_topic" default="/human/body_colliders"/>
   <arg name="collider_topic" default="/human/colliders"/>
+  <arg name="enable_hand_mapping" default="false"/>
+  <arg name="hand_finger_angles_topic" default="/hand_finger_angles"/>
+  <arg name="hand_collider_topic" default="/human/hand_colliders"/>
   <arg name="publish_collider_markers" default="true"/>
   <arg name="collider_markers_topic" default="/human/collider_markers"/>
-  <arg name="collider_marker_rate" default="5.0"/>
+  <arg name="collider_marker_rate" default="30.0"/>
   <arg name="collision_geometry" default="capsules"/>
   <arg name="sphere_interpolation_level" default="0"/>
   <arg name="sphere_radius_gain" default="1.0"/>
@@ -13,8 +18,27 @@
   <node pkg="human_mapping" exec="human_mapping_node" name="human_mapping_node" output="screen">
     <param from="$(var config)"/>
     <param name="input_skeleton_topic" value="$(var input_skeleton_topic)"/>
+    <param name="publish_rate_hz" value="$(var publish_rate_hz)"/>
     <param name="joint_command_topic" value="$(var joint_command_topic)"/>
-    <param name="collider_topic" value="$(var collider_topic)"/>
+    <param name="collider_topic" value="$(var body_collider_topic)"/>
+  </node>
+
+  <group if="$(var enable_hand_mapping)">
+    <node pkg="human_mapping" exec="zed_hand_mapping_node" name="zed_hand_mapping_node" output="screen">
+      <param from="$(var config)"/>
+      <param name="input_skeleton_topic" value="$(var input_skeleton_topic)"/>
+      <param name="output_topic" value="$(var hand_finger_angles_topic)"/>
+      <param name="hand_collider_topic" value="$(var hand_collider_topic)"/>
+    </node>
+  </group>
+
+  <node pkg="human_mapping" exec="human_collider_merge_node" name="human_collider_merge_node" output="screen">
+    <param from="$(var config)"/>
+    <param name="body_collider_topic" value="$(var body_collider_topic)"/>
+    <param name="hand_collider_topic" value="$(var hand_collider_topic)"/>
+    <param name="output_collider_topic" value="$(var collider_topic)"/>
+    <param name="include_hand_colliders" value="$(var enable_hand_mapping)"/>
+    <param name="publish_rate_hz" value="$(var publish_rate_hz)"/>
   </node>
 
   <group if="$(var publish_collider_markers)">

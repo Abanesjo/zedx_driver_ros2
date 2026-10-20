@@ -1,18 +1,33 @@
 human_mapping_node:
   ros__parameters:
     input_skeleton_topic: "/zed_fusion/body_trk/skeletons"
-    joint_command_topic: "/upper_body_targets_unsafe"
-    collider_topic: "/human/colliders"
+    joint_command_topic: "/human/joint_commands"
+    collider_topic: "/human/body_colliders"
     fallback_frame_id: "fusion_world"
 
-    publish_rate_hz: 60.0
+    publish_rate_hz: 30.0
     stale_timeout_sec: 1.0
     min_confidence: 30.0
-    require_body_38: true
+    # BODY_18 and BODY_34 use the same anatomical capsule segments. Joint
+    # angle commands remain at their home pose unless the input is BODY_38.
+    require_body_38: false
 
-    point_ema_alpha: 0.30
-    point_max_jump: 0.60
-    point_max_reject_count: 3
+    # Filter one shared pelvis/root motion and express every other point
+    # relative to it. SEARCHING observations predict the root from the last
+    # measured velocity instead of accepting SDK-translated ghost keypoints.
+    root_position_time_constant_sec: 0.12
+    root_velocity_time_constant_sec: 0.30
+    relative_position_time_constant_sec: 0.10
+    root_max_speed_mps: 3.0
+    relative_max_speed_mps: 6.0
+    root_max_step_m: 0.25
+    relative_max_step_m: 0.25
+    root_velocity_decay_time_constant_sec: 0.35
+    missing_point_hold_sec: 0.25
+    point_prediction_timeout_sec: 0.50
+    point_filter_reset_gap_sec: 0.50
+    capsule_max_length_change_fraction: 0.50
+    capsule_missing_hold_sec: 0.25
     angle_ema_alpha: 0.25
     angle_max_rate_deg: 100.0
 
@@ -21,20 +36,23 @@ human_mapping_node:
     neutral_calibration_duration: 10.0
 
     joint_names:
+      - waist_yaw_joint
       - waist_roll_joint
       - waist_pitch_joint
       - left_shoulder_pitch_joint
       - left_shoulder_roll_joint
+      - left_shoulder_yaw_joint
       - left_elbow_joint
       - right_shoulder_pitch_joint
       - right_shoulder_roll_joint
+      - right_shoulder_yaw_joint
       - right_elbow_joint
-    q_home: [0.0, 0.0, 0.0, 0.0, 1.5708, 0.0, 0.0, 1.5708]
-    signs: [-1.0, 1.0, -1.0, 1.0, -1.0, -1.0, -1.0, -1.0]
-    gains: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
-    bias: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
-    q_min: [-0.52, -0.52, -3.0892, -1.5882, -1.0472, -3.0892, -2.2515, -1.0472]
-    q_max: [0.52, 0.52, 2.6704, 2.2515, 2.0944, 2.6704, 1.5882, 2.0944]
+    q_home: [0.0, 0.0, 0.0, 0.35, 0.18, 0.0, 0.87, 0.35, -0.18, 0.0, 0.87]
+    signs: [1.0, -1.0, 1.0, -1.0, 1.0, 1.0, -1.0, -1.0, -1.0, 1.0, -1.0]
+    gains: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+    bias: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    q_min: [-2.094, -0.416, -0.416, -2.471, -1.271, -2.094, -0.838, -2.471, -1.801, -2.094, -0.838]
+    q_max: [2.094, 0.416, 0.416, 2.136, 1.801, 2.094, 1.676, 2.136, 1.271, 2.094, 1.676]
 
     human_radius_scale: 1.5
     torso_radius: 0.10
@@ -42,13 +60,63 @@ human_mapping_node:
     arm_radius: 0.05
     thigh_radius: 0.065
     shin_radius: 0.065
-    hand_extension_length: 0.16
+
+zed_hand_mapping_node:
+  ros__parameters:
+    input_skeleton_topic: "/zed_fusion/body_trk/skeletons"
+    output_topic: "/hand_finger_angles"
+    hand_collider_topic: "/human/hand_colliders"
+    fallback_frame_id: "fusion_world"
+    require_body_38: true
+
+    min_valid_hand_points: 1
+    min_scale_m: 0.05
+    fallback_scale_m: 0.25
+
+    open_score_ref: 0.45
+    fist_score_ref: 0.20
+    left_open_score_ref: -1.0
+    left_fist_score_ref: -1.0
+    right_open_score_ref: -1.0
+    right_fist_score_ref: -1.0
+
+    spread_weight: 0.60
+    extension_weight: 0.40
+    closure_ema_alpha: 0.30
+    open_threshold: 0.35
+    fist_threshold: 0.65
+
+    publish_continuous_open_amount: false
+    missing_timeout_sec: 0.50
+    timeout_state: 1.0
+    hold_last_on_timeout: true
+
+    output_layout: "finger10"
+    ring_follows_middle: true
+    publish_hand_colliders: true
+    open_length_m: 0.18
+    open_diameter_m: 0.18
+    fist_length_m: 0.10
+    fist_diameter_m: 0.10
+    debug_log: false
+    debug_log_period_sec: 1.0
+
+human_collider_merge_node:
+  ros__parameters:
+    body_collider_topic: "/human/body_colliders"
+    hand_collider_topic: "/human/hand_colliders"
+    output_collider_topic: "/human/colliders"
+    fallback_frame_id: "fusion_world"
+    include_hand_colliders: true
+    publish_rate_hz: 30.0
+    body_stale_timeout_sec: 1.0
+    hand_stale_timeout_sec: 1.0
 
 human_collider_viz_node:
   ros__parameters:
     input_collider_topic: "/human/colliders"
     collider_markers_topic: "/human/collider_markers"
-    collider_marker_rate: 60.0
+    collider_marker_rate: 30.0
     collision_geometry: "capsules"
     sphere_interpolation_level: 0
     sphere_radius_gain: 1.0
