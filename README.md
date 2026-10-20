@@ -2,7 +2,7 @@
 
 This repository allows bringup and body tracking of a ZEDX Camera. The cameras are attached to a ZED Box and the primary compute is on a more powerful networked computer. 
 
-USB cameras such as the ZED Mini are also supported, see [Camera Type](#camera-type).
+USB cameras such as the ZED Mini are also supported, see [ZED Mini](#zed-mini).
 
 ## Usage
 The instructions assume you will be splitting compute between the ZED Box and a networked workstation computer with an RTX GPU
@@ -94,33 +94,14 @@ The `FROM` line and the `ROS_DISTRO` argument at the top of `docker/Dockerfile` 
 
 All machines that exchange ROS topics must use the same distro: `rmw_zenoh` does not carry messages between Humble and Jazzy. The camera stream between `server.launch.xml` and `body_tracking.launch.xml` is not a ROS topic and is not affected.
 
-## Camera Type
-Both `server.launch.xml` and `body_tracking.launch.xml` take a `camera_type` argument. Use the same value on both.
-
-| `camera_type` | Cameras | Default stream mode |
-|---|---|---|
-| `zedx` (default) | ZED X (GMSL2) | HD1080 at 60 fps |
-| `zedm` | ZED Mini (USB) | VGA at 100 fps |
-
-The valid resolution and frame rate combinations for each type are listed at the top of `src/zed_launcher/launch/server.launch.xml`; override them with `grab_resolution:=` and `grab_frame_rate:=`.
-
-For `zedm`, body tracking also defaults to `depth_mode:=NEURAL` and `body_model:=HUMAN_BODY_MEDIUM`. Measured on a Jetson AGX Thor with one ZED Mini, this is the heaviest combination that keeps the fused skeleton at 60 Hz: HD720 only reaches 25 to 45 Hz, `HUMAN_BODY_ACCURATE` drops below 60 Hz, and `HUMAN_BODY_FAST` often loses the person at VGA.
-
-### Number of cameras
-The `zedm` setup currently uses a single ZED Mini, so `num_cameras` in `server.launch.xml` defaults to 1 for `zedm` (2 for `zedx`). With one camera only the left camera is started:
+## ZED Mini
+Two ZED Minis plugged into the same computer need no stream server: `zed_mini.launch.xml` runs body tracking directly on the local cameras. Start the Zenoh router as above, then:
 ```
-ros2 launch zed_launcher server.launch.xml camera_type:=zedm
-ros2 launch zed_launcher body_tracking.launch.xml camera_type:=zedm
+ros2 launch zed_launcher zed_mini.launch.xml debug:=true rviz:=true
 ```
-Body tracking takes the number of cameras from the calibration file, which may hold one or two cameras. If the server runs on the same machine, add `stream_address:=127.0.0.1`.
+It defaults to VGA at 100 fps, `depth_mode:=NEURAL` and `body_model:=HUMAN_BODY_MEDIUM`. Measured on a Jetson AGX Thor with one ZED Mini, this is the heaviest combination that keeps the fused skeleton at 60 Hz: HD720 only reaches 25 to 45 Hz, `HUMAN_BODY_ACCURATE` drops below 60 Hz, and `HUMAN_BODY_FAST` often loses the person at VGA. The valid resolution and frame rate combinations are listed at the top of `src/zed_launcher/launch/zed_mini.launch.xml`; override them with `camera_resolution:=` and `camera_fps:=`.
 
-For two USB cameras, pass `num_cameras:=2` and the serial numbers (shown by `ZED_Explorer -a`), because USB camera IDs depend on the order the cameras are detected:
-```
-ros2 launch zed_launcher server.launch.xml camera_type:=zedm num_cameras:=2 left_serial:=<serial> right_serial:=<serial>
-ros2 launch zed_launcher body_tracking.launch.xml camera_type:=zedm left_serial:=<serial> right_serial:=<serial>
-```
+The cameras are opened by serial number. For other ZED Minis, pass `left_serial:=` and `right_serial:=` (shown by `ZED_Explorer -a`) and update the calibration file.
 
 ## Calibration
-Each camera type has its own calibration file: `src/zed_launcher/calibration/<camera_type>/calibration.json`. To calibrate the cameras, update that file with the output obtained from the [ZED360](https://www.stereolabs.com/docs/fusion/zed360) tool, then rebuild `zed_launcher`.
-
-The `zedm` calibration is written by hand for a single camera: an identity pose, which puts the world origin at the camera with gravity-aligned axes.
+The ZED X calibration is `src/zed_launcher/calibration/zedx/calibration.json` and the ZED Mini calibration is `src/zed_launcher/calibration/zedm/calibration.json`. To calibrate the cameras, update that file with the output obtained from the [ZED360](https://www.stereolabs.com/docs/fusion/zed360) tool, then rebuild `zed_launcher`.

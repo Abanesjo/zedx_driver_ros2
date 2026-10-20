@@ -1,0 +1,41 @@
+<launch>
+  <!--
+    Body tracking with two ZED Minis plugged into this machine. No stream server:
+    the fusion node opens both cameras directly (input_mode live), by the serials
+    in the calibration file. Every other body_tracking.launch.xml argument
+    (debug, rviz, ...) can still be passed on the command line.
+
+    Valid camera_resolution / camera_fps combinations (resolution is per eye):
+      HD2K    2208x1242   15 fps
+      HD1080  1920x1080   30, 15 fps
+      HD720   1280x720    60, 30, 15 fps
+      VGA      672x376   100, 60, 30, 15 fps
+
+    Defaults were measured on the Jetson AGX Thor with one ZED Mini as the
+    heaviest settings that keep the fused skeleton at 60 Hz: HD720 only reaches
+    25 to 45 Hz, HUMAN_BODY_ACCURATE drops below 60 Hz, and HUMAN_BODY_FAST
+    often loses the person at VGA at the default confidence threshold.
+  -->
+  <arg name="camera_resolution" default="VGA" />
+  <arg name="camera_fps" default="100" />
+  <!-- Must match the serials in the calibration file. -->
+  <arg name="left_serial" default="10026981" />
+  <arg name="right_serial" default="10025986" />
+  <arg
+    name="fusion_config_path"
+    default="$(find-pkg-share zed_launcher)/calibration/zedm/calibration.json"
+  />
+  <arg name="body_model" default="HUMAN_BODY_MEDIUM" />
+  <arg name="depth_mode" default="NEURAL" />
+
+  <include file="$(find-pkg-share zed_launcher)/launch/body_tracking.launch.xml">
+    <arg name="input_mode" value="live" />
+    <arg name="camera_resolution" value="$(var camera_resolution)" />
+    <arg name="camera_fps" value="$(var camera_fps)" />
+    <arg name="left_serial" value="$(var left_serial)" />
+    <arg name="right_serial" value="$(var right_serial)" />
+    <arg name="fusion_config_path" value="$(var fusion_config_path)" />
+    <arg name="body_model" value="$(var body_model)" />
+    <arg name="depth_mode" value="$(var depth_mode)" />
+  </include>
+</launch>

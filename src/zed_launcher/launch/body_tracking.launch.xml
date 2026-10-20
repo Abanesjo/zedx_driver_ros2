@@ -1,18 +1,6 @@
 <launch>
-  <!-- Camera family: zedx (GMSL2) or zedm (USB). It picks the calibration
-       folder, the serials and the live-mode resolution. The valid resolution and
-       frame rate combinations are listed in server.launch.xml. -->
-  <arg name="camera_type" default="zedx" description="Camera family: zedx (GMSL2) or zedm (USB)">
-    <choice value="zedx" />
-    <choice value="zedm" />
-  </arg>
-
   <arg name="debug" default="false" />
-  <!-- Only used with input_mode:=live, like camera_resolution below. -->
-  <arg
-    name="camera_fps"
-    default="$(eval '\'60\' if \'$(var camera_type)\' == \'zedx\' else \'100\'')"
-  />
+  <arg name="camera_fps" default="60" />
   <arg name="fusion_publish_rate_hz" default="60.0" />
 
   <arg name="role" default="local" />
@@ -22,27 +10,14 @@
   <arg name="right_stream_port" default="30002" />
   <arg name="left_camera_name" default="zed_left" />
   <arg name="right_camera_name" default="zed_right" />
-  <!-- Must match the serials in the calibration file, which holds one or two
-       cameras. A single camera is the left one; leave right_serial at 0. -->
-  <arg
-    name="left_serial"
-    default="$(eval '\'41235597\' if \'$(var camera_type)\' == \'zedx\' else \'10026981\'')"
-  />
-  <arg
-    name="right_serial"
-    default="$(eval '\'49967328\' if \'$(var camera_type)\' == \'zedx\' else \'0\'')"
-  />
+  <arg name="left_serial" default="41235597" />
+  <arg name="right_serial" default="49967328" />
   <arg
     name="fusion_config_path"
-    default="$(find-pkg-share zed_launcher)/calibration/$(var camera_type)/calibration.json"
+    default="$(find-pkg-share zed_launcher)/calibration/zedx/calibration.json"
   />
   <!-- Options: HUMAN_BODY_FAST, HUMAN_BODY_MEDIUM, HUMAN_BODY_ACCURATE -->
-  <!-- zedm runs at VGA, where FAST often loses the person at the default
-       confidence threshold and ACCURATE drops below 60 Hz. -->
-  <arg
-    name="body_model"
-    default="$(eval '\'HUMAN_BODY_FAST\' if \'$(var camera_type)\' == \'zedx\' else \'HUMAN_BODY_MEDIUM\'')"
-  />
+  <arg name="body_model" default="HUMAN_BODY_FAST" />
   <!-- Options: BODY_18, BODY_34, BODY_38 -->
   <arg name="body_format" default="BODY_38" />
   <!-- confidence threshold for body tracking -->
@@ -55,26 +30,16 @@
   <arg name="single_body_switch_frames" default="60" />
   <arg name="publish_frame_id" default="fusion_world" />
   <arg name="output_topic" default="body_trk/skeletons" />
-  <!-- Only used with input_mode:=live; a stream keeps the sender's resolution. -->
-  <arg
-    name="camera_resolution"
-    default="$(eval '\'HD1080\' if \'$(var camera_type)\' == \'zedx\' else \'VGA\'')"
-  />
+  <arg name="camera_resolution" default="HD1080" />
   <arg name="publish_images" default="false" />
   <arg name="publish_overlay_images" default="$(var debug)" />
   <arg name="publish_per_camera_skeletons" default="$(var debug)" />
   <arg name="overlay_min_confidence" default="$(var confidence_threshold)" />
   <arg name="overlay_max_skeleton_age_sec" default="0.5" />
   <!-- Options: PERFORMANCE, QUALITY, ULTRA, NEURAL_LIGHT, NEURAL, NEURAL_PLUS -->
-  <!-- zedm: NEURAL is the heaviest mode that keeps 60 Hz at VGA with headroom.
-       NEURAL_PLUS has none, and aborts when the input is a stream. -->
-  <arg
-    name="depth_mode"
-    default="$(eval '\'NEURAL_LIGHT\' if \'$(var camera_type)\' == \'zedx\' else \'NEURAL\'')"
-  />
+  <arg name="depth_mode" default="NEURAL_LIGHT" />
   <arg name="fusion_reference_frame" default="WORLD" />
   <arg name="fusion_skeleton_smoothing" default="1.0" />
-  <!-- lowered automatically to the number of cameras in the calibration file -->
   <arg name="fusion_minimum_allowed_cameras" default="2" />
   <arg name="fusion_minimum_allowed_keypoints" default="7" />
   <arg name="sender_tracking_enabled" default="true"/>

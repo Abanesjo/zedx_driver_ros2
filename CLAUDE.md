@@ -33,6 +33,7 @@ Launch:
 ```bash
 ros2 launch zed_launcher server.launch.xml                              # ZED Box: camera stream servers
 ros2 launch zed_launcher body_tracking.launch.xml debug:=true rviz:=true  # fusion (workstation, or ZED Box)
+ros2 launch zed_launcher zed_mini.launch.xml debug:=true rviz:=true       # two local ZED Minis: fusion only, no server
 ros2 launch human_mapping human_mapping.launch.xml                      # joint targets + colliders
 ```
 
@@ -53,8 +54,8 @@ Three things differ between machines and are edited in place, so expect them to 
 Data flow:
 
 ```
-ZED Box:      zed_wrapper x1 or x2 (server.launch.xml)  -- H.264 streams, ports 30000 / 30002
-                   |
+ZED Box:      zed_wrapper x2 (server.launch.xml)       -- H.264 streams, ports 30000 / 30002
+                   |                      (ZED Mini: no server; the fusion node opens the USB cameras itself)
 Workstation:  zed_body_fusion_node   -> /zed_fusion/body_trk/skeletons   (zed_msgs/ObjectsStamped, frame fusion_world)
                    |
               human_mapping_node     -> /upper_body_targets_unsafe       (sensor_msgs/JointState, 8 joints)
@@ -67,13 +68,13 @@ Workstation:  zed_body_fusion_node   -> /zed_fusion/body_trk/skeletons   (zed_ms
 
 `server.launch.xml` includes the upstream `zed_camera.launch.py` twice and uses `param_overrides` to turn off every wrapper feature (depth, tracking, all publishers) except the stream server. The overrides shared by both cameras live in the `common_overrides` variable.
 
-Both launch files take `camera_type` (`zedx` or `zedm`), which must match on the two sides. Its value is passed straight to the wrapper as `camera_model`, and it also selects the default resolution and frame rate (the full mode table is in the comment at the top of `server.launch.xml`), the default `depth_mode` and `body_model`, the default serials, the calibration folder and `num_cameras` in `server.launch.xml` (2 for `zedx`, 1 for `zedm`; with 1 only the left camera is started). Derived defaults use `$(eval ...)` on `$(var camera_type)`.
+`server.launch.xml` and `body_tracking.launch.xml` are for the two ZED X cameras. `zed_mini.launch.xml` is for two ZED Minis on the same machine: it includes `body_tracking.launch.xml` with `input_mode:=live` and overrides only the ZED Mini settings (serials, `calibration/zedm/`, resolution, frame rate, `depth_mode`, `body_model`). Any other `body_tracking.launch.xml` argument can still be passed to it on the command line. The valid ZED Mini resolution and frame rate combinations are in its header comment.
 
 `zed_body_fusion_node` does not consume ROS topics from the wrapper. It uses the ZED SDK directly: for each camera in the calibration file (one or two) it opens an `sl::Camera` (from the network stream when `input_mode:=stream`, or from the local device when `live`), enables per-camera body tracking, and calls `startPublishing` over shared memory. Each camera has its own grab thread (`runCameraWorker`). An in-process `sl::Fusion` subscribes to both, and a wall timer (`processFusion`) retrieves fused bodies and publishes them. Points to know:
 
-- The `zedm` defaults (VGA at 100 fps, `NEURAL` depth, `HUMAN_BODY_MEDIUM`) were chosen by measurement on the Thor to hold 60 Hz skeleton output. At HD720 the per-camera pipeline only reaches 25 to 45 Hz; at VGA `HUMAN_BODY_ACCURATE` is below 60 Hz, `HUMAN_BODY_FAST` often misses the person at the default confidence threshold, and `NEURAL_PLUS` has no headroom and aborts the node when the input is a stream.
-- The calibration file (`calibration/<camera_type>/calibration.json`, ZED360 output) must contain one or two cameras; `fusion_minimum_allowed_cameras` is lowered to that count. `calibration/zedm/` is hand-written for a single ZED Mini with an identity pose, so `fusion_world` is at the camera, gravity-aligned. Cameras are matched to stream ports and names by serial number via `left_serial` / `right_serial`; the defaults are the serials of the current rigs, and a lone camera is the left one (`right_serial` 0). New cameras need both the calibration and those args updated.
-- Calibration files are installed to the package share directory, so adding or renaming one needs a `colcon build` of `zed_launcher` even with `--symlink-install`.
+- The ZED Mini defaults (VGA at 100 fps, `NEURAL` depth, `HUMAN_BODY_MEDIUM`) were chosen by measurement on the Thor to hold 60 Hz skeleton output. At HD720 the per-camera pipeline only reaches 25 to 45 Hz; at VGA `HUMAN_BODY_ACCURATE` is below 60 Hz, `HUMAN_BODY_FAST` often misses the person at the default confidence threshold, and `NEURAL_PLUS` has no headroom and aborts the node when the input is a stream. Those numbers are for a single camera.
+- The calibration file (`calibration/zedx/calibration.json` or `calibration/zedm/calibration.json`, ZED360 output) must contain one or two cameras; `fusion_minimum_allowed_cameras` is lowered to that count. Cameras are matched to stream ports and names by serial number via `left_serial` / `right_serial`; the defaults are the serials of the current rigs, and a lone camera is the left one (`right_serial` 0). In `live` mode each camera is opened by the serial in the calibration file. New cameras need both the calibration and those args updated.
+- Launch and calibration files are installed to the package share directory, so adding or renaming one needs a `colcon build` of `zed_launcher` even with `--symlink-install`.
 - The SDK is configured for ROS conventions (`RIGHT_HANDED_Z_UP_X_FWD`, metres), so no axis conversion happens downstream. Camera poses from the calibration are published as static TFs `fusion_world -> <camera_name>_left_camera_optical_frame`.
 - `single_body_enabled` publishes only one skeleton. Selection is sticky: it switches to a different body only if that body beats the current one by `single_body_switch_margin` confidence for `single_body_switch_frames` consecutive frames.
 - `debug:=true` only sets the defaults of `publish_overlay_images` and `publish_per_camera_skeletons`. Image retrieval is skipped when nothing subscribes.
@@ -90,7 +91,8 @@ Both launch files take `camera_type` (`zedx` or `zedm`), which must match on the
 - If no valid skeleton arrives within `stale_timeout_sec`, it publishes `q_home` and an empty capsule array rather than holding the last pose.
 - The joint order is fixed at 8 joints (waist roll/pitch, then shoulder pitch/roll and elbow per arm). `joint_names`, `q_home`, `signs`, `gains`, `bias`, `q_min`, `q_max` in `config/human_mapping.yaml` must all have exactly 8 entries in that order. `AngleFilter` also has its own hard-coded per-joint limits in the header, applied before the YAML limits.
 - Capsules are built from the same filtered keypoints, with radii multiplied by `human_radius_scale`, and forearm capsules extended past the wrist by `hand_extension_length` to cover the hand.
-- Launch arguments override the YAML for topic names; the viz node's `collider_marker_rate` launch default (5.0) overrides the YAML value (60.0).
+- Launch arguments override the YAML for topic names and for every viz-node parameter; the viz node's `collider_marker_rate` launch default (5.0) overrides the YAML value (60.0).
+- `collision_geometry` (`capsules`, `boxes`, `spheres`) and the `sphere_*` parameters only change how `human_collider_viz_node` draws the markers. `/human/colliders` is always capsules.
 
 ### `g1_cbf_msg`
 
