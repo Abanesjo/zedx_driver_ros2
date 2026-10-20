@@ -304,9 +304,9 @@ Two ZED Minis plugged into the same computer need no stream server: `zed_mini.la
 ```
 ros2 launch zed_launcher zed_mini.launch.xml debug:=true rviz:=true
 ```
-It defaults to VGA at 100 fps, `depth_mode:=NEURAL` and `body_model:=HUMAN_BODY_MEDIUM`. Measured on a Jetson AGX Thor with one ZED Mini, this is the heaviest combination that keeps the fused skeleton at 60 Hz: HD720 only reaches 25 to 45 Hz, `HUMAN_BODY_ACCURATE` drops below 60 Hz, and `HUMAN_BODY_FAST` often loses the person at VGA. The valid resolution and frame rate combinations are listed at the top of `src/zed_launcher/launch/zed_mini.launch.xml`; override them with `camera_resolution:=` and `camera_fps:=`.
+It includes `body_tracking.launch.xml` with AprilTag fusion off and defaults to VGA at 100 fps, `depth_mode:=NEURAL`, `body_model:=HUMAN_BODY_FAST`, `body_format:=BODY_18` and a 60 Hz Fusion loop. With BODY_18, `human_mapping` publishes colliders but holds the joint targets at their home pose; pass `body_format:=BODY_38` for joint angles. On a Jetson AGX Thor with one ZED Mini, HD720 only reaches 25 to 45 Hz of fused skeleton. The valid resolution and frame rate combinations are listed at the top of `src/zed_launcher/launch/zed_mini.launch.xml`; override them with `camera_resolution:=` and `camera_fps:=`. Any other `body_tracking.launch.xml` argument can be passed as well.
 
-The cameras are opened by serial number. For other ZED Minis, pass `left_serial:=` and `right_serial:=` (shown by `ZED_Explorer -a`) and update the calibration file.
+The cameras are opened by serial number. For other ZED Minis, pass `camera_serials:=` (shown by `ZED_Explorer -a`), keeping one entry per camera in `camera_names:=` and `stream_ports:=`, and update the calibration file.
 
 ## Calibration
 The ZED X calibration is `src/zed_launcher/calibration/zedx/calibration.json` and the ZED Mini calibration is `src/zed_launcher/calibration/zedm/calibration.json`. To calibrate the cameras, update that file with the output obtained from the [ZED360](https://www.stereolabs.com/docs/fusion/zed360) tool, then rebuild `zed_launcher`.
