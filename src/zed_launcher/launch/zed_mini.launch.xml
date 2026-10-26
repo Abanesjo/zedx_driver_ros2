@@ -12,22 +12,31 @@
       HD720   1280x720    60, 30, 15 fps
       VGA      672x376   100, 60, 30, 15 fps
 
-    The defaults held 60 Hz of fused skeleton with two ZED Minis on the RTX 5080
-    laptop (GPU held at about 840 MHz by thermal slowdown). Measured there at
-    VGA@100: FAST + BODY_38 + fitting + NEURAL_LIGHT 59.7 Hz, MEDIUM + BODY_38 +
-    fitting 49.5 Hz, MEDIUM + BODY_34 + fitting + NEURAL 38 Hz, ACCURATE +
-    BODY_34 + fitting + NEURAL_PLUS 22.5 Hz. HD720@60 and HD1080@30 drop frames
-    on the current USB cables.
+    Defaults: HD720 at 30 fps with a 30 Hz Fusion loop, MEDIUM + BODY_18,
+    no fitting, NEURAL_LIGHT. Measured over 60 s with one person in the scene
+    (two ZED Minis, RTX 5080 laptop):
+      HD720@30  29 Hz fused, 4 lost-body episodes per minute, no jumps > 15 cm
+      VGA@100   58 Hz fused, 13 lost-body episodes per minute: about every 3 s
+                Fusion stalls for 117 ms and the next frame jumps ~34 cm with a
+                ~20 m/s velocity, then the body is dropped
+      VGA@60    worse than VGA@100 (grab rate 51 fps, 27 episodes per minute)
+      HD1080@30 unusable: the cameras grab at about 3.5 fps on the current USB
+                cables
+    Earlier VGA@100 rate tests (GPU thermally throttled at about 840 MHz):
+    FAST + BODY_38 + fitting + NEURAL_LIGHT 59.7 Hz, MEDIUM + BODY_38 + fitting
+    49.5 Hz, MEDIUM + BODY_34 + fitting + NEURAL 38 Hz, ACCURATE + BODY_34 +
+    fitting + NEURAL_PLUS 22.5 Hz.
 
     human_mapping computes joint angles only from BODY_38. With BODY_18 it
     publishes colliders and holds the joint targets at q_home.
   -->
   <!-- Publishes a skeleton overlay image and the raw skeletons per camera. -->
   <arg name="debug" default="false" />
-  <arg name="camera_resolution" default="VGA" />
-  <arg name="camera_fps" default="100" />
-  <!-- Calling Fusion faster than 60 Hz lowered the output rate in testing. -->
-  <arg name="fusion_publish_rate_hz" default="60.0" />
+  <arg name="camera_resolution" default="HD720" />
+  <arg name="camera_fps" default="30" />
+  <!-- Match camera_fps. At VGA@100, calling Fusion faster than 60 Hz lowered
+       the output rate. -->
+  <arg name="fusion_publish_rate_hz" default="30.0" />
   <!-- Must match the serials in the calibration file. stream_ports is unused in
        live mode but must have one entry per camera. -->
   <arg name="camera_names" default="['zed_left', 'zed_right']" />
@@ -42,6 +51,11 @@
   <!-- With fitting on, Fusion turns BODY_18 into BODY_34 output. -->
   <arg name="body_fitting_enabled" default="false" />
   <arg name="depth_mode" default="NEURAL_LIGHT" />
+  <!-- When Fusion drops the body, the single-body bridge republishes the last
+       skeleton for single_body_bridge_timeout_sec (0.5 s). 0 holds it in place.
+       Moving it with the last velocity made it slide up to 1 m: Fusion's
+       velocity spikes to ~20 m/s in the frames just before it drops a body. -->
+  <arg name="single_body_bridge_max_speed_mps" default="0.0" />
 
   <include file="$(find-pkg-share zed_launcher)/launch/body_tracking.launch.xml">
     <arg name="input_mode" value="live" />
@@ -58,5 +72,9 @@
     <arg name="body_format" value="$(var body_format)" />
     <arg name="body_fitting_enabled" value="$(var body_fitting_enabled)" />
     <arg name="depth_mode" value="$(var depth_mode)" />
+    <arg
+      name="single_body_bridge_max_speed_mps"
+      value="$(var single_body_bridge_max_speed_mps)"
+    />
   </include>
 </launch>
